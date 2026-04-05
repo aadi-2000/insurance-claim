@@ -1,0 +1,27 @@
+========================================
+INSURANCE CLAIM DOCUMENT - DUPLICATE ATTEMPT
+========================================
+
+Patient Name: Amit Patel
+Policy Number: SBI-HEALTH-2024-9921
+Hospital Name: Max Healthcare, Delhi
+Diagnosis: Coronary Angioplasty with Stent Placement
+Admission Date: 05-Feb-2026
+Discharge Date: 08-Feb-2026
+Total Claim Amount: INR 3,50,000
+
+TREATMENT DETAILS:
+- Emergency coronary angioplasty procedure
+- Drug-eluting stent implantation
+- Post-operative care for 3 days
+- Cardiac monitoring and enzyme tests
+
+DOCUMENTS ATTACHED:
+✓ Discharge Summary
+✓ Policy Document
+✓ Hospital Registration
+✓ Investigation Reports
+
+CLAIM STATUS: DUPLICATE DETECTED
+SIMILARITY SCORE: 0.97 (Threshold: 0.85)
+ORIGINAL CLAIM: CLM-2026-02-001

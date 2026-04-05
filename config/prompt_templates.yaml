@@ -1,0 +1,119 @@
+# ============================================================
+# Prompt Templates - Insurance Claim AI
+# ============================================================
+
+# Orchestrator Prompts
+orchestrator:
+  system: |
+    You are an insurance claim processing AI orchestrator. Your role is to analyze
+    the outputs from multiple specialized agents and produce a final claim assessment.
+    Be specific with numbers, scores, and recommendations.
+    Always respond in valid JSON format.
+
+  summary: |
+    Given the following claim processing results from our multi-agent system,
+    provide a concise professional summary (3-4 sentences) explaining:
+    1. The claim decision and key factors
+    2. Notable findings from the agents
+    3. Any recommendations for the claims adjuster
+
+    Claim Summary: {claim_summary}
+    Decision: {decision}
+    Reasons: {reasons}
+    Weighted Confidence: {confidence}%
+
+  decision_report: |
+    Generate a comprehensive claim assessment report based on the following
+    multi-agent analysis results:
+
+    Image Agent: {image_result}
+    PDF Agent: {pdf_result}
+    Requirements Agent: {requirements_result}
+    Credibility Agent: {credibility_result}
+    Billing Agent: {billing_result}
+    Fraud Agent: {fraud_result}
+
+    Provide the report in JSON with keys: executive_summary, risk_assessment,
+    recommendations, and follow_up_actions.
+
+# Image Processing Prompts
+image_processing:
+  extract_text: |
+    Analyze this medical document image and extract all text content.
+    Identify the document type and structure the output as JSON with keys:
+    document_type, patient_info, diagnosis, procedures, medications,
+    billing_info, and any other relevant sections.
+
+  verify_integrity: |
+    Analyze this medical document image for signs of manipulation or tampering.
+    Check for: inconsistent fonts, pixel artifacts, metadata anomalies,
+    copy-paste indicators, and any other forensic indicators.
+    Return JSON with: integrity_score (0-1), manipulation_detected (boolean),
+    findings (list of observations).
+
+# PDF Processing Prompts
+pdf_processing:
+  extract_structured: |
+    Extract all text from this PDF document while preserving the layout structure.
+    Identify sections, tables, headers, and key-value pairs.
+    Return structured JSON with identified sections and their content.
+
+  extract_policy: |
+    Extract and interpret the following insurance policy document.
+    Identify: policy_number, holder_name, coverage_type, sum_insured,
+    validity_period, covered_procedures, exclusions, waiting_periods,
+    sub_limits, co_pay_details, and network_hospitals.
+
+# Credibility & Policy Interpretation Prompts
+credibility_policy:
+  system: |
+    You are an insurance policy interpretation AI specializing in Indian
+    health insurance regulations (IRDAI guidelines). Analyze claims against
+    policy terms and provide professional assessments. Respond in valid JSON only.
+
+  analyze_policy: |
+    Analyze this insurance claim for policy compliance:
+
+    Patient: {patient_name}
+    Diagnosis: {diagnosis}
+    Procedures: {procedures}
+    Hospital: {hospital}
+    Total Bill: {total_bill}
+    Coverage Type: {coverage_type}
+    Sum Insured: {sum_insured}
+    Policy Start: {policy_start}
+    Credibility Score: {credibility_score}
+    Past Claims: {past_claims}
+
+    Current Policy Assessment:
+    - Procedure Covered: {procedure_covered}
+    - Exclusions: {exclusions_applicable}
+    - Waiting Period Satisfied: {waiting_period_satisfied}
+    - Within Sum Insured: {within_sum_insured}
+    - Co-pay: {co_pay_percentage}%
+
+    Provide a JSON response with:
+    1. 'summary': 1-2 sentence assessment
+    2. 'risk_flags': list of any concerns
+    3. 'recommendation': APPROVE / REVIEW / REJECT
+    4. 'confidence': your confidence level (0-1)
+
+# Fraud Detection Prompts
+fraud_detection:
+  analyze_patterns: |
+    Analyze the following claim data for potential fraud indicators:
+    {claim_data}
+
+    Check for: unusual billing patterns, procedure-diagnosis mismatch,
+    provider anomalies, temporal inconsistencies, and historical patterns.
+    Return a risk assessment with fraud_score (0-1) and detailed findings.
+
+# Few-shot Examples
+few_shot:
+  claim_classification:
+    - input: "Patient admitted for chest pain, diagnosed with STEMI, underwent angioplasty"
+      output: "CARDIAC - EMERGENCY - HIGH_COST"
+    - input: "Patient visited for routine health checkup, blood tests performed"
+      output: "PREVENTIVE - ROUTINE - LOW_COST"
+    - input: "Patient admitted for knee replacement surgery, planned procedure"
+      output: "ORTHOPEDIC - ELECTIVE - HIGH_COST"

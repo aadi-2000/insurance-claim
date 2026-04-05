@@ -1,0 +1,33 @@
+========================================
+INSURANCE CLAIM DOCUMENT - SUSPICIOUS
+========================================
+
+Patient Name: Vikram Singh
+Policy Number: LIC-HEALTH-2026-1234
+Hospital Name: City Care Clinic, Noida
+Diagnosis: Multiple Fractures (Left Arm, Right Leg, Ribs)
+Admission Date: 01-April-2026
+Discharge Date: 02-April-2026
+Total Claim Amount: INR 8,75,000
+
+TREATMENT DETAILS:
+- Multiple fracture treatment
+- Surgical intervention for compound fractures
+- High-cost implants and procedures
+
+SUSPICIOUS INDICATORS:
+⚠️ Policy purchased only 35 days ago (waiting period: 30 days)
+⚠️ Claim amount unusually high for 1-day hospitalization
+⚠️ Hospital not in approved network list
+⚠️ Patient has 5 previous claims in last 6 months
+⚠️ Diagnosis inconsistent with discharge timeline
+⚠️ Bills show inflated charges compared to standard rates
+
+DOCUMENTS ATTACHED:
+✓ Discharge Summary (authenticity questionable)
+✓ Policy Document
+✗ Hospital Registration Certificate - Not verified
+✓ Bills (amounts appear inflated)
+
+CLAIM STATUS: Flagged for Fraud Investigation
+FRAUD RISK SCORE: 0.87 (High Risk)

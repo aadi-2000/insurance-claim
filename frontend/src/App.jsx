@@ -1,0 +1,388 @@
+import { useState, useRef } from "react";
+
+const API_BASE = "/api";
+
+// ============================================================
+// UI COMPONENTS
+// ============================================================
+
+const AgentCard = ({ result, index }) => {
+  const [expanded, setExpanded] = useState(false);
+  if (!result) return null;
+  const statusColors = { success: "#10b981", error: "#ef4444", pending: "#f59e0b" };
+  return (
+    <div style={{
+      background: "rgba(15,23,42,0.7)", border: `1px solid rgba(148,163,184,0.15)`,
+      borderRadius: 12, padding: 20, marginBottom: 12,
+      animation: `fadeSlideIn 0.5s ease ${index * 0.08}s both`
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: statusColors[result.status] || "#64748b", boxShadow: `0 0 8px ${statusColors[result.status]}` }} />
+          <span style={{ color: "#e2e8f0", fontFamily: "mono", fontSize: 14, fontWeight: 600 }}>{result.agent}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ color: "#94a3b8", fontSize: 12, fontFamily: "mono" }}>{result.processing_time}</span>
+          <span style={{ background: `${statusColors[result.status]}22`, color: statusColors[result.status], padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, fontFamily: "mono" }}>
+            {Math.round((result.confidence || 0) * 100)}% conf
+          </span>
+        </div>
+      </div>
+      <div style={{ color: "#64748b", fontSize: 12, marginBottom: 8, fontStyle: "italic" }}>Owner: {result.owner}</div>
+      <button onClick={() => setExpanded(!expanded)} style={{
+        background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4",
+        padding: "6px 14px", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "mono"
+      }}>
+        {expanded ? "▼ Hide" : "▶ Show"} Reasoning ({result.reasoning?.length || 0} steps)
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 12, padding: 14, background: "rgba(0,0,0,0.3)", borderRadius: 8, borderLeft: "3px solid #06b6d4" }}>
+          {result.reasoning?.map((step, i) => (
+            <div key={i} style={{ color: "#94a3b8", fontSize: 12, fontFamily: "mono", padding: "3px 0", lineHeight: 1.6 }}>
+              <span style={{ color: "#475569" }}>{String(i + 1).padStart(2, "0")}.</span> {step}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const MetricBox = ({ label, value, color = "#06b6d4", sub = "" }) => (
+  <div style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12, padding: "18px 20px", flex: "1 1 160px", minWidth: 160 }}>
+    <div style={{ color: "#64748b", fontSize: 11, fontFamily: "mono", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+    <div style={{ color, fontSize: 26, fontWeight: 700, fontFamily: "mono" }}>{value}</div>
+    {sub && <div style={{ color: "#475569", fontSize: 11, marginTop: 4 }}>{sub}</div>}
+  </div>
+);
+
+const ProgressBar = ({ progress, label }) => (
+  <div style={{ marginBottom: 6 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+      <span style={{ color: "#94a3b8", fontSize: 12, fontFamily: "mono" }}>{label}</span>
+      <span style={{ color: "#06b6d4", fontSize: 12, fontFamily: "mono" }}>{progress}%</span>
+    </div>
+    <div style={{ background: "rgba(30,41,59,0.8)", borderRadius: 4, height: 6, overflow: "hidden" }}>
+      <div style={{ width: `${progress}%`, height: "100%", background: "linear-gradient(90deg,#06b6d4,#22d3ee)", borderRadius: 4, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
+    </div>
+  </div>
+);
+
+// ============================================================
+// MAIN APP
+// ============================================================
+export default function App() {
+  const [stage, setStage] = useState("upload");
+  const [files, setFiles] = useState([]);
+  const [progress, setProgress] = useState(0);
+  const [processingStatus, setProcessingStatus] = useState("");
+  const [result, setResult] = useState(null);
+  const [activeTab, setActiveTab] = useState("pipeline");
+  const [dragActive, setDragActive] = useState(false);
+  const [backendStatus, setBackendStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const agentPipeline = [
+    { key: "image", name: "Image Processing", icon: "🖼️", owner: "Vivek" },
+    { key: "pdf", name: "PDF Extraction", icon: "📄", owner: "Swapnil" },
+    { key: "requirements", name: "Requirements Check", icon: "📋", owner: "Karthikeyan" },
+    { key: "credibility", name: "Credibility & Policy", icon: "🔍", owner: "Shruti" },
+    { key: "billing", name: "Billing Analysis", icon: "💰", owner: "Siri" },
+    { key: "fraud", name: "Fraud Detection", icon: "🛡️", owner: "Titash" },
+    { key: "orchestrator", name: "Orchestrator", icon: "🎯", owner: "Aadithya" },
+  ];
+
+  const checkBackend = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      const data = await res.json();
+      setBackendStatus(data);
+    } catch {
+      setBackendStatus({ status: "offline" });
+    }
+  };
+
+  const handleFiles = (newFiles) => setFiles((prev) => [...prev, ...Array.from(newFiles)]);
+  const handleDrop = (e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); };
+
+  const processClaimPipeline = async () => {
+    setStage("processing");
+    setProgress(10);
+    setProcessingStatus("Uploading files and starting agent pipeline...");
+
+    const formData = new FormData();
+    files.forEach((f) => formData.append("files", f));
+
+    // Simulate progress while backend processes
+    const progressInterval = setInterval(() => {
+      setProgress((p) => Math.min(p + 3, 90));
+    }, 500);
+
+    const steps = [
+      "Image Processing Agent analyzing documents...",
+      "PDF Processing Agent extracting text...",
+      "Requirements Agent validating documents...",
+      "Credibility Agent checking policy...",
+      "Billing Agent analyzing charges...",
+      "Fraud Detection Agent running models...",
+      "Orchestrator fusing decisions...",
+    ];
+    let stepIdx = 0;
+    const statusInterval = setInterval(() => {
+      if (stepIdx < steps.length) {
+        setProcessingStatus(steps[stepIdx]);
+        stepIdx++;
+      }
+    }, 1500);
+
+    try {
+      const res = await fetch(`${API_BASE}/process-claim`, { method: "POST", body: formData });
+      clearInterval(progressInterval);
+      clearInterval(statusInterval);
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Processing failed");
+      }
+
+      const data = await res.json();
+      setResult(data.result);
+      setProgress(100);
+      setStage("results");
+    } catch (e) {
+      clearInterval(progressInterval);
+      clearInterval(statusInterval);
+      setProcessingStatus(`Error: ${e.message}. Make sure the backend is running on port 8000.`);
+      setProgress(0);
+    }
+  };
+
+  const decisionColors = { APPROVE: "#10b981", REJECT: "#ef4444", REVIEW: "#f59e0b", HOLD: "#8b5cf6" };
+
+  const resetApp = () => {
+    setStage("upload"); setFiles([]); setResult(null);
+    setProgress(0); setActiveTab("pipeline"); setProcessingStatus("");
+  };
+
+  // Extract agent results from the orchestrator reasoning trace
+  const getAgentResults = () => {
+    if (!result) return [];
+    // The backend returns reasoning_trace and agent_summaries
+    // We reconstruct individual agent cards from agent_summaries
+    return result.agent_summaries || [];
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "linear-gradient(135deg, #0a0e1a 0%, #0f172a 40%, #0c1222 100%)",
+      color: "#e2e8f0", fontFamily: "'Segoe UI', system-ui, sans-serif",
+      position: "relative", overflow: "hidden"
+    }}>
+      <style>{`
+        @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes gradientShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: rgba(15,23,42,0.5); } ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+      `}</style>
+
+      <div style={{ position: "fixed", top: -200, right: -200, width: 500, height: 500, background: "radial-gradient(circle, rgba(6,182,212,0.06) 0%, transparent 70%)", pointerEvents: "none" }} />
+
+      {/* Header */}
+      <header style={{ borderBottom: "1px solid rgba(148,163,184,0.08)", padding: "16px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", backdropFilter: "blur(20px)", position: "sticky", top: 0, zIndex: 50, background: "rgba(10,14,26,0.85)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, background: "linear-gradient(135deg, #06b6d4, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>⚕</div>
+          <div>
+            <h1 style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5, background: "linear-gradient(90deg, #e2e8f0, #94a3b8)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>ClaimFlow AI</h1>
+            <p style={{ color: "#475569", fontSize: 11, fontFamily: "mono" }}>Multi-Agent Insurance Claim Processor</p>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {stage !== "upload" && (
+            <button onClick={resetApp} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "mono" }}>↺ New Claim</button>
+          )}
+          <button onClick={checkBackend} style={{ background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: "mono" }}>
+            {backendStatus?.status === "healthy" ? "● Backend Online" : backendStatus?.status === "offline" ? "○ Backend Offline" : "⟳ Check Backend"}
+          </button>
+        </div>
+      </header>
+
+      <main style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 24px" }}>
+
+        {/* =================== UPLOAD STAGE =================== */}
+        {stage === "upload" && (
+          <div style={{ animation: "fadeSlideIn 0.5s ease both" }}>
+            <div style={{ textAlign: "center", marginBottom: 40 }}>
+              <h2 style={{ fontSize: 36, fontWeight: 800, letterSpacing: -1, marginBottom: 12, background: "linear-gradient(90deg, #06b6d4, #8b5cf6, #06b6d4)", backgroundSize: "200% 200%", animation: "gradientShift 4s ease infinite", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+                AI-Powered Claim Processing
+              </h2>
+              <p style={{ color: "#64748b", fontSize: 15, maxWidth: 550, margin: "0 auto", lineHeight: 1.6 }}>
+                Upload insurance claim documents to trigger the multi-agent processing pipeline.
+                Seven specialized AI agents will analyze, validate, and produce a comprehensive assessment.
+              </p>
+            </div>
+
+            {/* Pipeline Visual */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 6, marginBottom: 40, padding: "0 10px" }}>
+              {agentPipeline.map((agent, i) => (
+                <div key={agent.key} style={{ display: "flex", alignItems: "center" }}>
+                  <div style={{ background: agent.key === "orchestrator" ? "rgba(139,92,246,0.15)" : "rgba(6,182,212,0.08)", border: `1px solid ${agent.key === "orchestrator" ? "rgba(139,92,246,0.4)" : "rgba(6,182,212,0.2)"}`, borderRadius: 10, padding: "10px 14px", textAlign: "center", minWidth: 110 }}>
+                    <div style={{ fontSize: 22, marginBottom: 4 }}>{agent.icon}</div>
+                    <div style={{ color: "#e2e8f0", fontSize: 11, fontWeight: 600, fontFamily: "mono" }}>{agent.name}</div>
+                    <div style={{ color: "#475569", fontSize: 10 }}>{agent.owner}</div>
+                  </div>
+                  {i < agentPipeline.length - 1 && <span style={{ color: "#1e293b", margin: "0 2px", fontSize: 18 }}>→</span>}
+                </div>
+              ))}
+            </div>
+
+            {/* Upload */}
+            <div onDragOver={(e) => { e.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()}
+              style={{ border: `2px dashed ${dragActive ? "#06b6d4" : "rgba(148,163,184,0.15)"}`, borderRadius: 16, padding: "60px 40px", textAlign: "center", cursor: "pointer", background: dragActive ? "rgba(6,182,212,0.05)" : "rgba(15,23,42,0.4)", transition: "all 0.3s", marginBottom: 20 }}>
+              <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.doc,.docx" onChange={(e) => handleFiles(e.target.files)} style={{ display: "none" }} />
+              <div style={{ fontSize: 48, marginBottom: 16, opacity: 0.7 }}>📎</div>
+              <p style={{ color: "#94a3b8", fontSize: 16, fontWeight: 500, marginBottom: 8 }}>Drop claim documents here or click to browse</p>
+              <p style={{ color: "#475569", fontSize: 13 }}>Supports: Medical discharge summaries, policy documents, hospital bills, lab reports</p>
+            </div>
+
+            {files.length > 0 && (
+              <div style={{ marginBottom: 24 }}>
+                <div style={{ color: "#94a3b8", fontSize: 13, marginBottom: 10, fontFamily: "mono" }}>{files.length} file(s) selected:</div>
+                {files.map((f, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 8, padding: "10px 16px", marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span>{f.type?.includes("image") ? "🖼️" : "📄"}</span>
+                      <span style={{ color: "#e2e8f0", fontSize: 13, fontFamily: "mono" }}>{f.name}</span>
+                    </div>
+                    <span style={{ color: "#475569", fontSize: 12 }}>{(f.size / 1024).toFixed(1)} KB</span>
+                  </div>
+                ))}
+                <button onClick={processClaimPipeline} style={{ width: "100%", marginTop: 16, padding: 16, background: "linear-gradient(135deg, #06b6d4, #0891b2)", border: "none", borderRadius: 12, color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5, boxShadow: "0 4px 20px rgba(6,182,212,0.3)" }}>
+                  ▶ Process Claim Through Agent Pipeline
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =================== PROCESSING STAGE =================== */}
+        {stage === "processing" && (
+          <div style={{ animation: "fadeSlideIn 0.4s ease both" }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, color: "#e2e8f0", marginBottom: 6 }}>Processing Claim...</h2>
+            <ProgressBar progress={progress} label="Pipeline Progress" />
+            <div style={{ marginTop: 20, padding: 24, background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12 }}>
+              <div style={{ color: "#06b6d4", fontSize: 14, fontFamily: "mono", animation: progress > 0 && progress < 100 ? "pulse 1.5s infinite" : "none" }}>
+                ⟳ {processingStatus}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 8, marginTop: 24 }}>
+              {agentPipeline.map((agent) => (
+                <div key={agent.key} style={{ padding: "8px 14px", borderRadius: 8, fontSize: 12, fontFamily: "mono", background: "rgba(30,41,59,0.5)", border: "1px solid rgba(71,85,105,0.3)", color: "#475569" }}>
+                  {agent.icon} {agent.name}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* =================== RESULTS STAGE =================== */}
+        {stage === "results" && result && (
+          <div style={{ animation: "fadeSlideIn 0.5s ease both" }}>
+            {/* Decision Banner */}
+            <div style={{ background: `${decisionColors[result.decision]}11`, border: `2px solid ${decisionColors[result.decision]}44`, borderRadius: 16, padding: "28px 32px", marginBottom: 24, textAlign: "center" }}>
+              <div style={{ fontSize: 42, fontWeight: 800, color: decisionColors[result.decision], letterSpacing: -1, marginBottom: 8 }}>
+                {result.decision === "APPROVE" ? "✅" : result.decision === "REJECT" ? "❌" : "⚠️"} CLAIM {result.decision}
+              </div>
+              <div style={{ color: "#94a3b8", fontSize: 14, maxWidth: 700, margin: "0 auto", lineHeight: 1.7 }}>
+                {result.processing_summary?.ai_summary || result.decision_reasons?.join(". ")}
+              </div>
+            </div>
+
+            {/* Metrics */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 24 }}>
+              <MetricBox label="Amount Claimed" value={`₹${((result.claim_summary?.amount_claimed || 0) / 1000).toFixed(0)}K`} color="#e2e8f0" sub={`₹${(result.claim_summary?.amount_claimed || 0).toLocaleString("en-IN")}`} />
+              <MetricBox label="Amount Approved" value={`₹${((result.claim_summary?.amount_approved || 0) / 1000).toFixed(0)}K`} color="#10b981" sub={`₹${(result.claim_summary?.amount_approved || 0).toLocaleString("en-IN")}`} />
+              <MetricBox label="Confidence" value={`${((result.weighted_confidence || 0) * 100).toFixed(1)}%`} color="#06b6d4" sub="Weighted average" />
+              <MetricBox label="Fraud Score" value={(result.claim_summary?.fraud_score || 0).toFixed(2)} color={(result.claim_summary?.fraud_score || 0) > 0.3 ? "#ef4444" : "#10b981"} sub={(result.claim_summary?.fraud_score || 0) > 0.3 ? "Elevated" : "Very Low Risk"} />
+              <MetricBox label="Processing" value={result.processing_summary?.orchestrator_time || "N/A"} color="#8b5cf6" sub={`${result.processing_summary?.agents_passed}/${result.processing_summary?.total_agents} agents passed`} />
+            </div>
+
+            {/* Tabs */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "rgba(15,23,42,0.5)", padding: 4, borderRadius: 10 }}>
+              {[{ key: "pipeline", label: "Decision Fusion" }, { key: "claim", label: "Claim Details" }, { key: "trace", label: "Reasoning Trace" }].map((tab) => (
+                <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "mono", background: activeTab === tab.key ? "rgba(6,182,212,0.15)" : "transparent", color: activeTab === tab.key ? "#06b6d4" : "#64748b" }}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Decision Fusion Tab */}
+            {activeTab === "pipeline" && (
+              <div style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12, padding: 24, animation: "fadeSlideIn 0.4s ease both" }}>
+                <h3 style={{ color: "#06b6d4", fontSize: 16, fontWeight: 700, marginBottom: 20, fontFamily: "mono" }}>⚖️ Weighted Decision Fusion Matrix</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 1, background: "rgba(148,163,184,0.1)", borderRadius: 8, overflow: "hidden", marginBottom: 24 }}>
+                  {["Agent", "Confidence", "Weight", "Weighted", "Status"].map((h) => (
+                    <div key={h} style={{ background: "rgba(6,182,212,0.1)", padding: "10px 14px", color: "#06b6d4", fontSize: 11, fontWeight: 700, fontFamily: "mono", textTransform: "uppercase" }}>{h}</div>
+                  ))}
+                  {(result.agent_summaries || []).map((a, i) => (
+                    [a.agent, `${(a.confidence * 100).toFixed(1)}%`, a.weight, a.weighted_score?.toFixed(4) || "0", a.status].map((cell, j) => (
+                      <div key={`${i}-${j}`} style={{ background: "rgba(15,23,42,0.9)", padding: "10px 14px", color: j === 4 ? (cell === "PASS" ? "#10b981" : "#ef4444") : "#94a3b8", fontSize: 12, fontFamily: "mono", fontWeight: j === 4 ? 700 : 400 }}>{cell}</div>
+                    ))
+                  ))}
+                </div>
+                <h4 style={{ color: "#e2e8f0", fontSize: 14, marginBottom: 14, fontFamily: "mono" }}>Confidence Distribution</h4>
+                {(result.agent_summaries || []).map((a, i) => (
+                  <ProgressBar key={i} progress={Math.round(a.confidence * 100)} label={a.agent} />
+                ))}
+                <div style={{ marginTop: 24, padding: 20, background: `${decisionColors[result.decision]}08`, border: `1px solid ${decisionColors[result.decision]}33`, borderRadius: 10, textAlign: "center" }}>
+                  <div style={{ color: "#64748b", fontSize: 12, marginBottom: 6, fontFamily: "mono" }}>FINAL WEIGHTED CONFIDENCE</div>
+                  <div style={{ fontSize: 40, fontWeight: 800, color: decisionColors[result.decision], fontFamily: "mono" }}>{((result.weighted_confidence || 0) * 100).toFixed(1)}%</div>
+                </div>
+              </div>
+            )}
+
+            {/* Claim Details Tab */}
+            {activeTab === "claim" && (
+              <div style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12, padding: 24, animation: "fadeSlideIn 0.4s ease both" }}>
+                <h3 style={{ color: "#e2e8f0", fontSize: 16, fontWeight: 700, marginBottom: 20, fontFamily: "mono" }}>Claim Summary</h3>
+                {Object.entries(result.claim_summary || {}).map(([key, value]) => (
+                  <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(148,163,184,0.06)" }}>
+                    <span style={{ color: "#64748b", fontSize: 13, fontFamily: "mono", textTransform: "uppercase" }}>{key.replace(/_/g, " ")}</span>
+                    <span style={{ color: "#e2e8f0", fontSize: 13, fontFamily: "mono", fontWeight: 500 }}>
+                      {typeof value === "number" ? (key.includes("amount") ? `₹${value.toLocaleString("en-IN")}` : value.toFixed(2)) : String(value)}
+                    </span>
+                  </div>
+                ))}
+                <div style={{ marginTop: 20, padding: 16, background: "rgba(0,0,0,0.3)", borderRadius: 8 }}>
+                  <div style={{ color: "#64748b", fontSize: 12, marginBottom: 8 }}>Decision Reasons:</div>
+                  {(result.decision_reasons || []).map((r, i) => (
+                    <div key={i} style={{ color: "#e2e8f0", fontSize: 13, padding: "3px 0" }}>• {r}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Reasoning Trace Tab */}
+            {activeTab === "trace" && (
+              <div style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(139,92,246,0.2)", borderRadius: 12, padding: 24, animation: "fadeSlideIn 0.4s ease both" }}>
+                <h3 style={{ color: "#8b5cf6", fontSize: 16, fontWeight: 700, marginBottom: 16, fontFamily: "mono" }}>🎯 Full Orchestrator Reasoning Trace</h3>
+                <div style={{ fontFamily: "mono", fontSize: 13, lineHeight: 2 }}>
+                  {(result.reasoning_trace || []).map((log, i) => (
+                    <div key={i} style={{ color: "#a5b4fc", padding: "2px 0" }}>
+                      <span style={{ color: "#475569", marginRight: 8 }}>[{String(i).padStart(2, "0")}]</span>{log}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      <footer style={{ borderTop: "1px solid rgba(148,163,184,0.06)", padding: "16px 32px", textAlign: "center", color: "#334155", fontSize: 12, fontFamily: "mono" }}>
+        ClaimFlow AI • Multi-Agent Insurance Processing • Backend: localhost:8000 • Frontend: localhost:5173
+      </footer>
+    </div>
+  );
+}

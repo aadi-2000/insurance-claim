@@ -1,0 +1,59 @@
+# ============================================================
+# Logging Configuration - Insurance Claim AI
+# ============================================================
+
+version: 1
+disable_existing_loggers: false
+
+formatters:
+  standard:
+    format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  detailed:
+    format: "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+  json:
+    format: '{"time":"%(asctime)s","level":"%(levelname)s","module":"%(name)s","message":"%(message)s"}'
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    level: INFO
+    formatter: standard
+    stream: ext://sys.stdout
+
+  file:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: detailed
+    filename: data/outputs/app.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 5
+
+  agent_trace:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG
+    formatter: json
+    filename: data/outputs/agent_traces.jsonl
+    maxBytes: 52428800  # 50MB
+    backupCount: 3
+
+loggers:
+  insurance_claim_ai:
+    level: DEBUG
+    handlers: [console, file]
+    propagate: false
+
+  insurance_claim_ai.agents:
+    level: DEBUG
+    handlers: [console, file, agent_trace]
+    propagate: false
+
+  insurance_claim_ai.llm:
+    level: INFO
+    handlers: [console, file]
+    propagate: false
+
+root:
+  level: WARNING
+  handlers: [console]

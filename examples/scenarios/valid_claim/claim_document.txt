@@ -1,0 +1,28 @@
+========================================
+INSURANCE CLAIM DOCUMENT
+========================================
+
+Patient Name: Rajesh Kumar
+Policy Number: HDFC-HEALTH-2024-8891
+Hospital Name: Apollo Hospitals, Chennai
+Diagnosis: Acute Appendicitis
+Admission Date: 15-March-2026
+Discharge Date: 18-March-2026
+Total Claim Amount: INR 85,000
+
+TREATMENT DETAILS:
+- Emergency appendectomy performed on 15-March-2026
+- Post-operative care for 3 days
+- All investigations completed (Blood work, Ultrasound)
+- No complications during surgery
+
+DOCUMENTS ATTACHED:
+✓ Discharge Summary
+✓ Policy Document
+✓ Hospital Registration Certificate
+✓ Doctor's Prescription
+✓ Investigation Reports (Blood work, Ultrasound)
+✓ ID Proof (Aadhaar Card)
+✓ Original Bills and Receipts
+
+CLAIM STATUS: Complete and Valid

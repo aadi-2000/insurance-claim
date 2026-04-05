@@ -1,0 +1,133 @@
+# ============================================================
+# Model Configuration - Insurance Claim AI
+# ============================================================
+
+# OpenAI GPT Configuration
+openai:
+  model: "gpt-4o-mini"
+  api_key_env: "OPENAI_API_KEY"
+  max_tokens: 2048
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  timeout: 30
+  max_retries: 3
+  retry_delay: 1.0
+
+# Claude Configuration (for future integration)
+claude:
+  model: "claude-sonnet-4-20250514"
+  api_key_env: "ANTHROPIC_API_KEY"
+  max_tokens: 2048
+  temperature: 0.3
+  timeout: 30
+  max_retries: 3
+
+# Vision Models
+vision:
+  openai:
+    model: "gpt-4o"
+    max_tokens: 4096
+    detail: "high"
+  
+# Embedding Models
+embeddings:
+  model: "text-embedding-3-small"
+  dimensions: 1536
+  batch_size: 100
+
+# Agent Configuration
+agents:
+  image_agent:
+    name: "Image Processing Agent"
+    owner: "Vivek Vardhan"
+    enabled: true
+    timeout: 60
+    models:
+      - "gpt-4o"           # Vision LLM
+      - "resnet50"          # CNN for image analysis
+      - "vit-base"          # Vision Transformer
+
+  pdf_agent:
+    name: "PDF Processing Agent"
+    owner: "Swapnil Sontakke"
+    enabled: true
+    timeout: 60
+    models:
+      - "gpt-4o-mini"      # Text extraction
+      - "text-embedding-3-small"  # RAG embeddings
+
+  requirements_agent:
+    name: "Requirements & Document Validation Agent"
+    owner: "Karthikeyan Pillai"
+    enabled: true
+    timeout: 45
+    models:
+      - "gpt-4o-mini"      # Document validation
+      - "siamese-net"       # Duplicate detection
+
+  credibility_agent:
+    name: "Credibility & Policy Interpretation Agent"
+    owner: "Shruti Roy"
+    enabled: true
+    timeout: 45
+    models:
+      - "random-forest"     # Credibility scoring
+      - "bert-policy"       # Fine-tuned BERT for policy
+
+  billing_agent:
+    name: "Billing & Processing Agent"
+    owner: "Siri Spandana"
+    enabled: true
+    timeout: 30
+    models:
+      - "gpt-4o-mini"      # Billing analysis
+
+  fraud_agent:
+    name: "Fraud Detection Agent"
+    owner: "Titash Bhattacharya"
+    enabled: true
+    timeout: 60
+    models:
+      - "random-forest"
+      - "xgboost"
+      - "cnn-fraud"
+      - "lstm-temporal"
+
+  orchestrator:
+    name: "Master Orchestrator Agent"
+    owner: "Aadithya Pabbisetty"
+    enabled: true
+    timeout: 120
+    decision_weights:
+      image: 0.15
+      pdf: 0.10
+      requirements: 0.20
+      credibility: 0.20
+      billing: 0.15
+      fraud: 0.20
+    thresholds:
+      fraud_reject: 0.5
+      fraud_review: 0.3
+      credibility_reject: 0.4
+      billing_anomaly_flag: 0.6
+
+# Rate Limiting
+rate_limits:
+  openai:
+    requests_per_minute: 60
+    tokens_per_minute: 150000
+  claude:
+    requests_per_minute: 50
+    tokens_per_minute: 100000
+
+# Server
+server:
+  backend_port: 8000
+  frontend_port: 5173
+  host: "0.0.0.0"
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3000"
+    - "http://127.0.0.1:5173"

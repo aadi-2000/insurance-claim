@@ -1,0 +1,45 @@
+========================================
+INSURANCE CLAIM DOCUMENT - PRE-EXISTING CONDITION
+========================================
+
+Patient Name: Suresh Reddy
+Policy Number: BAJAJ-HEALTH-2024-5566
+Hospital Name: Yashoda Hospitals, Hyderabad
+Diagnosis: Diabetic Ketoacidosis (Type 2 Diabetes Complication)
+Admission Date: 25-March-2026
+Discharge Date: 28-March-2026
+Total Claim Amount: INR 65,000
+
+TREATMENT DETAILS:
+- Emergency admission for diabetic ketoacidosis
+- Insulin therapy and glucose monitoring
+- Electrolyte correction
+- 3 days of hospitalization
+
+PRE-EXISTING CONDITION ANALYSIS:
+⚠️ Patient has Type 2 Diabetes (diagnosed 2020)
+⚠️ Policy purchased: 10-January-2024
+⚠️ Waiting period for PED: 2 years (730 days)
+⚠️ Days since policy start: 805 days ✓ Waiting period satisfied
+
+POLICY CLAUSE VERIFICATION:
+✓ Initial waiting period: 30 days - Completed
+✓ Pre-existing disease waiting: 730 days - Completed
+✓ Diabetes-related complications: Covered after PED waiting
+✓ Current claim is for acute complication, not routine management
+
+MEDICAL HISTORY:
+- Diabetes disclosed at policy purchase: YES
+- Premium loaded for PED: YES (+15%)
+- Previous diabetes-related claims: 0
+
+DOCUMENTS ATTACHED:
+✓ Discharge Summary
+✓ Policy Document with PED declaration
+✓ Hospital Registration Certificate
+✓ Investigation Reports (HbA1c, Blood Sugar, Ketone levels)
+✓ Previous medical records
+✓ ID Proof
+
+CLAIM STATUS: Valid - PED Waiting Period Satisfied
+COVERAGE: Approved under PED clause

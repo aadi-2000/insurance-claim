@@ -1,0 +1,43 @@
+========================================
+INSURANCE CLAIM DOCUMENT - HIGH VALUE
+========================================
+
+Patient Name: Dr. Meera Krishnan
+Policy Number: STAR-PREMIUM-2023-7788
+Hospital Name: Medanta - The Medicity, Gurugram
+Diagnosis: Liver Transplant Surgery
+Admission Date: 20-January-2026
+Discharge Date: 15-February-2026
+Total Claim Amount: INR 25,00,000
+
+TREATMENT DETAILS:
+- Liver transplant surgery performed
+- 26 days of hospitalization
+- ICU care for 10 days
+- Post-transplant immunosuppressive therapy
+- Multiple specialist consultations
+
+POLICY DETAILS:
+- Sum Insured: INR 50,00,000
+- Policy Active Since: 2023 (3 years)
+- No previous claims
+- Premium: INR 85,000/year
+- Waiting period for major surgeries: Completed
+
+SUB-LIMIT CHECK:
+- Organ Transplant Coverage: INR 30,00,000
+- Claim Amount: INR 25,00,000 ✓ Within limit
+
+DOCUMENTS ATTACHED:
+✓ Comprehensive Discharge Summary
+✓ Policy Document
+✓ Hospital Accreditation Certificate
+✓ Pre-authorization approval
+✓ Detailed Investigation Reports
+✓ Surgeon's Certificate
+✓ Donor Compatibility Reports
+✓ Itemized Bills and Receipts
+✓ ID Proof and Address Proof
+
+CLAIM STATUS: Valid High-Value Claim
+REQUIRES: Senior Management Approval

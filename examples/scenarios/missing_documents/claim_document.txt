@@ -1,0 +1,26 @@
+========================================
+INSURANCE CLAIM DOCUMENT
+========================================
+
+Patient Name: Priya Sharma
+Policy Number: ICICI-HEALTH-2025-4567
+Hospital Name: Fortis Hospital, Mumbai
+Diagnosis: Dengue Fever
+Admission Date: 10-March-2026
+Total Claim Amount: INR 45,000
+
+TREATMENT DETAILS:
+- Admitted for dengue fever treatment
+- IV fluids and platelet monitoring
+- Discharged after platelet count stabilized
+
+DOCUMENTS ATTACHED:
+✓ Discharge Summary
+✓ Policy Document
+✗ Hospital Registration Certificate - MISSING
+✗ Investigation Reports - MISSING
+✓ ID Proof (PAN Card)
+✗ Original Bills - MISSING
+
+CLAIM STATUS: Incomplete - Missing Critical Documents
+MISSING FIELDS: discharge_date
