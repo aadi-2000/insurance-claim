@@ -147,16 +147,43 @@ The React app will start at `http://localhost:5173`.
 Upload → Image Agent → PDF Agent → Requirements Agent
                                           ↓
          Orchestrator ← Fraud Agent ← Billing Agent ← Credibility Agent
-              ↓
+                       ↓
         Final Decision (APPROVE / REJECT / REVIEW / HOLD)
 ```
 
+### Processing Flow
+
+1. **Document Upload** → User uploads claim documents (images/PDFs)
+2. **Image Agent** → Extracts text from images using OCR and LLM vision
+3. **PDF Agent** → Extracts text and metadata from PDF documents
+4. **Requirements Agent** → Validates all required fields and checks for duplicates
+   - **Conditional Logic**: If missing documents → HALT and request from user
+5. **Credibility Agent** → Evaluates user credibility score
+   - **Conditional Logic**: If score < 0.40 → STOP and REJECT claim immediately
+6. **Billing Agent** → Analyzes billing amounts and detects anomalies
+7. **Fraud Agent** → Runs fraud detection models
+8. **Orchestrator** → Applies weighted decision fusion and generates final decision
+
+### Orchestrator Decision Fusion
+
 The **Orchestrator** (Aadithya's component) applies weighted decision fusion:
 - Collects results from all 6 agents
-- Applies configurable weights (image: 0.15, pdf: 0.10, requirements: 0.20, credibility: 0.20, billing: 0.15, fraud: 0.20)
+- Applies configurable weights:
+  - Image: 0.15
+  - PDF: 0.10
+  - Requirements: 0.20 (Critical)
+  - Credibility: 0.20 (Critical)
+  - Billing: 0.15
+  - Fraud: 0.20 (Critical)
 - Multi-threshold logic for fraud, credibility, billing anomalies
 - LLM-powered natural language summary generation
 - Full reasoning trace for auditability
+
+### Conditional Processing
+
+- **Missing Documents**: Orchestrator halts after Requirements Agent and requests specific documents from user
+- **Low Credibility**: Orchestrator stops immediately after Credibility Agent if score < 0.40 and rejects claim
+- **Skipped Agents**: Agents not applicable to file type (e.g., Image Agent for PDF uploads) are marked as "SKIPPED" not "FAILED"
 
 ## Integration Guide (For Team Members)
 
