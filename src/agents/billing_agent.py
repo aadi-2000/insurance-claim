@@ -1,6 +1,6 @@
 """
 Billing & Processing Agent (Agent 3) - IMPROVED VERSION
-Owner: Siri Spandana
+Owner: Spandana
 """
 
 import asyncio
