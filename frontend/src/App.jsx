@@ -105,6 +105,50 @@ export default function App() {
   const handleFiles = (newFiles) => setFiles((prev) => [...prev, ...Array.from(newFiles)]);
   const handleDrop = (e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); };
 
+  const resumeClaimWithFiles = async (additionalFiles, claimId) => {
+    setStage("processing");
+    setProgress(10);
+    setProcessingStatus("Uploading additional documents...");
+
+    const formData = new FormData();
+    additionalFiles.forEach((f) => formData.append("files", f));
+    formData.append("claim_id", claimId);
+
+    const progressInterval = setInterval(() => {
+      setProgress((p) => Math.min(p + 2, 85));
+    }, 800);
+
+    try {
+      const res = await fetch(`${API_BASE}/resume-claim`, { method: "POST", body: formData });
+      clearInterval(progressInterval);
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Resume failed");
+      }
+
+      const data = await res.json();
+      
+      if (data.status === "still_hold") {
+        // Still missing fields
+        setProgress(100);
+        setProcessingStatus(`Still missing: ${data.missing_fields.join(", ")}`);
+        alert(`Additional documents received, but still missing: ${data.missing_fields.join(", ")}\n\nPlease upload documents containing this information.`);
+        setStage("results"); // Stay on results page
+      } else {
+        // Requirements met, processing completed
+        setResult(data.result);
+        setProgress(100);
+        setStage("results");
+      }
+    } catch (e) {
+      clearInterval(progressInterval);
+      setProcessingStatus(`Error: ${e.message}`);
+      setProgress(0);
+      alert(`Resume failed: ${e.message}`);
+    }
+  };
+
   const processClaimPipeline = async () => {
     setStage("processing");
     setProgress(10);
@@ -113,27 +157,27 @@ export default function App() {
     const formData = new FormData();
     files.forEach((f) => formData.append("files", f));
 
-    // Simulate progress while backend processes
+    // More conservative progress simulation - slower increments
     const progressInterval = setInterval(() => {
-      setProgress((p) => Math.min(p + 3, 90));
-    }, 500);
+      setProgress((p) => Math.min(p + 2, 85)); // Cap at 85% until backend responds
+    }, 800);
 
     const steps = [
       "Image Processing Agent analyzing documents...",
       "PDF Processing Agent extracting text...",
       "Requirements Agent validating documents...",
-      "Credibility Agent checking policy...",
-      "Billing Agent analyzing charges...",
-      "Fraud Detection Agent running models...",
-      "Orchestrator fusing decisions...",
+      "Checking for missing fields...",
     ];
     let stepIdx = 0;
     const statusInterval = setInterval(() => {
       if (stepIdx < steps.length) {
         setProcessingStatus(steps[stepIdx]);
         stepIdx++;
+      } else {
+        // After initial steps, show waiting message
+        setProcessingStatus("Waiting for backend processing...");
       }
-    }, 1500);
+    }, 2000);
 
     try {
       const res = await fetch(`${API_BASE}/process-claim`, { method: "POST", body: formData });
@@ -346,6 +390,26 @@ export default function App() {
             {activeTab === "claim" && (
               <div style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12, padding: 24, animation: "fadeSlideIn 0.4s ease both" }}>
                 <h3 style={{ color: "#e2e8f0", fontSize: 16, fontWeight: 700, marginBottom: 20, fontFamily: "mono" }}>Claim Summary</h3>
+                
+                {/* Show upload button for HOLD claims */}
+                {result.decision === "HOLD" && result.claim_summary?.missing_fields && (
+                  <div style={{ marginBottom: 24, padding: 20, background: "rgba(139,92,246,0.1)", border: "2px solid rgba(139,92,246,0.3)", borderRadius: 12 }}>
+                    <div style={{ color: "#a78bfa", fontSize: 14, fontWeight: 600, marginBottom: 12 }}>📋 Missing Required Information</div>
+                    <div style={{ color: "#94a3b8", fontSize: 13, marginBottom: 16 }}>
+                      The following fields are missing: <strong style={{ color: "#e2e8f0" }}>{result.claim_summary.missing_fields.join(", ")}</strong>
+                    </div>
+                    <label style={{ display: "block", width: "100%", padding: "14px 20px", background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", borderRadius: 10, textAlign: "center", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer", transition: "all 0.2s" }}>
+                      📤 Upload Additional Documents
+                      <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => {
+                        const additionalFiles = Array.from(e.target.files);
+                        if (additionalFiles.length > 0) {
+                          resumeClaimWithFiles(additionalFiles, result.claim_summary?.claim_id || "unknown");
+                        }
+                      }} style={{ display: "none" }} />
+                    </label>
+                  </div>
+                )}
+                
                 {Object.entries(result.claim_summary || {}).map(([key, value]) => (
                   <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(148,163,184,0.06)" }}>
                     <span style={{ color: "#64748b", fontSize: 13, fontFamily: "mono", textTransform: "uppercase" }}>{key.replace(/_/g, " ")}</span>

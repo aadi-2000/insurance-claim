@@ -20,14 +20,18 @@ from pathlib import Path
 from typing import List
 
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load environment variables from .env file
+load_dotenv()
 
 from src.utils.logger import setup_logging
 from src.llm.gpt_client import GPTClient
@@ -191,6 +195,115 @@ async def process_claim(files: List[UploadFile] = File(...)):
     except Exception as e:
         logger.error(f"Pipeline failed: {e}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+@app.post("/api/resume-claim")
+async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form(...)):
+    """
+    Resume a HOLD claim by uploading additional documents.
+    
+    This endpoint allows users to provide missing documents/information
+    and continue processing from where the pipeline was halted.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    
+    logger.info(f"Resuming claim {claim_id} with {len(files)} additional file(s)")
+    start_time = time.time()
+    
+    # Process all uploaded files (could be multiple for missing fields)
+    all_results = {"image": {}, "pdf": {}}
+    
+    for uploaded_file in files:
+        file_bytes = await uploaded_file.read()
+        filename = uploaded_file.filename or "document"
+        mime_type = uploaded_file.content_type or "application/octet-stream"
+        
+        logger.info(f"Processing: {filename} ({mime_type}, {len(file_bytes)} bytes)")
+        
+        # Process based on file type
+        if mime_type.startswith("image/"):
+            result = await agents["image"].process(file_bytes, filename, mime_type)
+            # Merge with existing image results
+            if all_results["image"]:
+                # Combine extracted text
+                existing_text = all_results["image"].get("output", {}).get("extracted_text", "")
+                new_text = result.get("output", {}).get("extracted_text", "")
+                result["output"]["extracted_text"] = existing_text + "\n" + new_text
+            all_results["image"] = result
+            
+        elif mime_type == "application/pdf":
+            result = await agents["pdf"].process(file_bytes, filename)
+            if all_results["pdf"]:
+                existing_text = all_results["pdf"].get("output", {}).get("extracted_text", "")
+                new_text = result.get("output", {}).get("extracted_text", "")
+                result["output"]["extracted_text"] = existing_text + "\n" + new_text
+            all_results["pdf"] = result
+    
+    try:
+        # Re-run requirements validation with new documents
+        requirements_result = await agents["requirements"].process(
+            all_results.get("image", {}),
+            all_results.get("pdf", {})
+        )
+        
+        # Check if requirements are now met
+        requirements_met = requirements_result.get("output", {}).get("requirements_met", False)
+        missing_fields = requirements_result.get("output", {}).get("missing_fields", [])
+        
+        if not requirements_met:
+            # Still missing fields - return HOLD again
+            elapsed = time.time() - start_time
+            logger.info(f"Claim still on HOLD - missing: {missing_fields}")
+            
+            return JSONResponse(content={
+                "success": True,
+                "status": "still_hold",
+                "missing_fields": missing_fields,
+                "message": "Additional documents received but some fields are still missing",
+                "total_time": f"{elapsed:.1f}s",
+            })
+        
+        # Requirements met - continue with full pipeline
+        logger.info("Requirements now met - continuing with full pipeline")
+        
+        # Prepare combined results for remaining agents
+        combined_results = {
+            "image": all_results.get("image", {}),
+            "pdf": all_results.get("pdf", {}),
+            "requirements": requirements_result
+        }
+        
+        # Run remaining agents (Credibility, Billing, Fraud)
+        reasoning_log = []
+        def on_log(msg):
+            reasoning_log.append(msg)
+        
+        # Credibility Agent
+        combined_results["credibility"] = await agents["credibility"].process(combined_results)
+        
+        # Billing Agent
+        combined_results["billing"] = await agents["billing"].process(combined_results)
+        
+        # Fraud Agent
+        combined_results["fraud"] = await agents["fraud"].process(combined_results)
+        
+        # Final decision fusion
+        final_result = await orchestrator._fuse_decision(combined_results, reasoning_log)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Resumed claim processed in {elapsed:.1f}s - Decision: {final_result.decision}")
+        
+        return JSONResponse(content={
+            "success": True,
+            "result": final_result.to_dict(),
+            "total_time": f"{elapsed:.1f}s",
+            "resumed": True,
+        })
+        
+    except Exception as e:
+        logger.error(f"Resume pipeline failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Resume processing failed: {str(e)}")
 
 
 # Serve frontend index.html for all non-API routes
