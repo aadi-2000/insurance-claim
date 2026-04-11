@@ -409,7 +409,67 @@ export default function App() {
                     </label>
                   </div>
                 )}
-                
+                {/* Billing Details (modified by Spandana) */}
+                {result.claim_summary?.billing_breakdown && (
+                    <div style={{
+                      marginTop: 24,
+                      marginBottom: 24,
+                      padding: 20,
+                      background: "rgba(15,23,42,0.55)",
+                      border: "1px solid rgba(6,182,212,0.2)",
+                      borderRadius: 12
+                    }}>
+                      <h3 style={{ color: "#e2e8f0", fontSize: 16, fontWeight: 700, marginBottom: 16, fontFamily: "mono" }}>
+                        Billing Details
+                      </h3>
+
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+                        <MetricBox
+                          label="Billing Anomaly"
+                          value={(result.claim_summary?.billing_anomaly_score || 0).toFixed(2)}
+                          color={(result.claim_summary?.billing_anomaly_score || 0) > 0.3 ? "#ef4444" : "#10b981"}
+                          sub={(result.claim_summary?.billing_anomaly_score || 0) > 0.3 ? "Needs review" : "Looks normal"}
+                        />
+                        <MetricBox
+                          label="Billing Deductions"
+                          value={`₹${((result.claim_summary?.billing_deductions || 0) / 1000).toFixed(0)}K`}
+                          color="#f59e0b"
+                          sub={`₹${(result.claim_summary?.billing_deductions || 0).toLocaleString("en-IN")}`}
+                        />
+                      </div>
+
+                      <div style={{ display: "grid", gap: 12 }}>
+                        {Object.entries(result.claim_summary.billing_breakdown).map(([category, details]) => (
+                          <div
+                            key={category}
+                            style={{
+                              padding: 14,
+                              borderRadius: 10,
+                              background: "rgba(30,41,59,0.55)",
+                              border: "1px solid rgba(148,163,184,0.15)"
+                            }}
+                          >
+                            <div style={{ color: "#e2e8f0", fontWeight: 700, marginBottom: 8 }}>
+                              {category.replaceAll("_", " ").toUpperCase()}
+                            </div>
+                            <div style={{ color: "#94a3b8", fontSize: 13 }}>Claimed: ₹{(details.claimed || 0).toLocaleString("en-IN")}</div>
+                            <div style={{ color: "#94a3b8", fontSize: 13 }}>Approved: ₹{(details.approved || 0).toLocaleString("en-IN")}</div>
+                            <div style={{ color: details.status === "partial" ? "#f59e0b" : "#10b981", fontSize: 13, marginTop: 4 }}>
+                              Status: {details.status}
+                            </div>
+                            {details.reason && (
+                              <div style={{ color: "#64748b", fontSize: 12, marginTop: 6 }}>
+                                {details.reason}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+
+                {/* ---------------------- */}
                 {Object.entries(result.claim_summary || {}).map(([key, value]) => (
                   <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(148,163,184,0.06)" }}>
                     <span style={{ color: "#64748b", fontSize: 13, fontFamily: "mono", textTransform: "uppercase" }}>{key.replace(/_/g, " ")}</span>

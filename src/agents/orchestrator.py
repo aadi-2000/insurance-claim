@@ -720,6 +720,12 @@ class OrchestratorAgent:
         # Amount approved from billing agent
         amount_approved = self._safe_get(results, "billing", "output", "total_approved", default=amount_claimed)
         
+        #Billing Relevant (modified by Spandana)
+        billing_output=self._safe_get(results, "billing","output",default={})
+        billing_breakdown=billing_output.get("breakdown",{})
+        billing_anomaly_score=billing_output.get("anomaly_score",0)
+        billing_deductions = billing_output.get("deductions",0)
+        print("[orchestrator][claim summary] billing anomaly", billing_anomaly_score)
         return {
             "patient": extracted_reqs.get("patient_name") or self._safe_get(results, "image", "output", "patient_name", default="N/A"),
             "patient_id": extracted_reqs.get("policy_number") or self._safe_get(results, "image", "output", "patient_id", default="N/A"),
@@ -732,6 +738,10 @@ class OrchestratorAgent:
             "fraud_score": self._safe_get(results, "fraud", "output", "overall_fraud_score", default=0),
             "credibility_score": self._safe_get(results, "credibility", "output", "credibility_score", default=0),
             "documents_complete": self._safe_get(results, "requirements", "output", "requirements_met", default=False),
+            #added billing
+            "billing_anomaly_score": billing_anomaly_score,
+            "billing_deductions": billing_deductions,
+            "billing_breakdown": billing_breakdown,
         }
 
     async def _generate_summary(self, decision_result: Dict) -> str:
