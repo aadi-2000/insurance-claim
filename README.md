@@ -2,6 +2,17 @@
 
 AI-powered insurance claim pre-screening and fraud detection using LLMs, Computer Vision, NLP, and Deep Learning with an orchestrated multi-agent architecture.
 
+## 🚀 Features
+
+- **Multi-Agent Pipeline**: 6 specialized AI agents working in orchestrated sequence
+- **Smart Document Processing**: OCR + LLM vision for medical documents
+- **Resume Functionality**: Upload additional documents for HOLD claims without restarting
+- **Real-time Processing**: Live progress tracking and agent status updates
+- **Fraud Detection**: ML-based credibility scoring and fraud detection
+- **Duplicate Detection**: FAISS-powered semantic similarity search
+- **Weighted Decision Fusion**: Intelligent orchestration with configurable agent weights
+- **Beautiful UI**: Modern React frontend with real-time updates
+
 ## Team Members
 
 | Member | Role | Agent |
@@ -83,6 +94,7 @@ insurance_claim_ai/
 - Python 3.10+
 - Node.js 18+
 - OpenAI API Key
+- Tesseract OCR (for image text extraction)
 
 ### 1. Clone & Setup Environment
 
@@ -95,13 +107,24 @@ source venv/bin/activate    # On Windows: venv\Scripts\activate
 
 # Install Python dependencies
 pip install -r requirements.txt
+
+# Install Tesseract OCR
+# macOS:
+brew install tesseract
+
+# Ubuntu/Debian:
+sudo apt-get install tesseract-ocr
+
+# Windows:
+# Download from https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
 ### 2. Configure API Keys
 
 ```bash
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Edit .env and add your OpenAI API key:
+# OPENAI_API_KEY=your_key_here
 ```
 
 ### 3. Start the Backend (Port 8000)
@@ -130,7 +153,8 @@ The React app will start at `http://localhost:5173`.
 1. Open `http://localhost:5173` in your browser
 2. Upload claim documents (images or PDFs)
 3. Click "Process Claim Through Agent Pipeline"
-4. View results across all 7 agents with reasoning traces
+4. View real-time processing across all agents
+5. If claim is on HOLD, upload additional documents to resume processing
 
 ## API Endpoints
 
@@ -140,6 +164,7 @@ The React app will start at `http://localhost:5173`.
 | GET | `/api/agents` | List all agents |
 | GET | `/api/config` | System configuration |
 | POST | `/api/process-claim` | Process uploaded documents |
+| POST | `/api/resume-claim` | Resume HOLD claim with additional documents |
 
 ## Agent Architecture
 
@@ -154,15 +179,39 @@ Upload → Image Agent → PDF Agent → Requirements Agent
 ### Processing Flow
 
 1. **Document Upload** → User uploads claim documents (images/PDFs)
-2. **Image Agent** → Extracts text from images using OCR and LLM vision
-3. **PDF Agent** → Extracts text and metadata from PDF documents
+2. **Image Agent** → Extracts text from images using:
+   - Tesseract OCR with custom preprocessing
+   - GPT-4o-mini vision for enhanced medical document extraction
+   - Combines both methods for maximum accuracy
+3. **PDF Agent** → Extracts text and metadata from PDF documents using PyPDF2
 4. **Requirements Agent** → Validates all required fields and checks for duplicates
-   - **Conditional Logic**: If missing documents → HALT and request from user
-5. **Credibility Agent** → Evaluates user credibility score
+   - Extracts structured data using LLM with JSON output
+   - Falls back to regex patterns for OCR errors
+   - Uses FAISS + Sentence-BERT for duplicate detection
+   - **Conditional Logic**: If missing fields → HALT with HOLD status
+5. **Credibility Agent** → Evaluates user credibility score using Random Forest ML model
    - **Conditional Logic**: If score < 0.40 → STOP and REJECT claim immediately
-6. **Billing Agent** → Analyzes billing amounts and detects anomalies
-7. **Fraud Agent** → Runs fraud detection models
+6. **Billing Agent** → Analyzes billing amounts and detects anomalies (MOCK)
+7. **Fraud Agent** → Runs fraud detection models (MOCK)
 8. **Orchestrator** → Applies weighted decision fusion and generates final decision
+
+### Resume Functionality (NEW)
+
+When a claim is placed on **HOLD** due to missing information:
+
+1. Frontend displays missing fields in a purple notification box
+2. User clicks "Upload Additional Documents" button
+3. User uploads new documents (images/PDFs) containing missing information
+4. Backend processes new documents through Image/PDF agents
+5. Requirements Agent re-validates with merged data
+6. If requirements met → Pipeline continues from Credibility Agent
+7. If still missing → Returns HOLD with updated missing fields list
+
+**Key Benefits:**
+- No need to restart the entire process
+- Can upload multiple documents at once
+- Iterative - upload multiple times until complete
+- Preserves previous extraction results
 
 ### Orchestrator Decision Fusion
 
@@ -181,9 +230,22 @@ The **Orchestrator** (Aadithya's component) applies weighted decision fusion:
 
 ### Conditional Processing
 
-- **Missing Documents**: Orchestrator halts after Requirements Agent and requests specific documents from user
+- **Missing Documents**: Orchestrator halts after Requirements Agent and returns HOLD status with missing fields list
+- **Resume Processing**: Users can upload additional documents to continue from where the pipeline halted
 - **Low Credibility**: Orchestrator stops immediately after Credibility Agent if score < 0.40 and rejects claim
 - **Skipped Agents**: Agents not applicable to file type (e.g., Image Agent for PDF uploads) are marked as "SKIPPED" not "FAILED"
+
+## Required Fields for Insurance Claims
+
+The Requirements Agent validates the following mandatory fields:
+
+- `patient_name` - Full name of the patient
+- `policy_number` - Insurance policy/UHID number
+- `hospital_name` - Name of the hospital/medical facility
+- `diagnosis` - Medical diagnosis or condition
+- `admission_date` - Date of hospital admission
+- `discharge_date` - Date of hospital discharge
+- `total_claim_amount` - Total amount being claimed
 
 ## Integration Guide (For Team Members)
 
@@ -207,10 +269,60 @@ return {
 
 ## Technologies Used
 
-- **Backend**: FastAPI, Python 3.11
-- **Frontend**: React 18, Vite 5
-- **LLMs**: OpenAI GPT-4o / GPT-4o-mini
-- **ML/DL**: scikit-learn, XGBoost, PyTorch, TensorFlow (agent-specific)
-- **NLP**: BERT/RoBERTa, Sentence-BERT, Transformers
-- **Computer Vision**: ResNet, EfficientNet, Vision Transformers
-- **RAG**: FAISS / Pinecone vector databases
+### Backend
+- **Framework**: FastAPI, Python 3.11
+- **LLM Integration**: OpenAI GPT-4o-mini (vision + text)
+- **OCR**: Tesseract OCR with PIL/Pillow
+- **PDF Processing**: PyPDF2
+- **ML Models**: scikit-learn (Random Forest for credibility scoring)
+- **Embeddings**: Sentence-BERT (all-MiniLM-L6-v2)
+- **Vector Search**: FAISS for duplicate detection
+- **Environment**: python-dotenv for configuration
+
+### Frontend
+- **Framework**: React 18 with Vite 5
+- **Styling**: Inline CSS with modern gradients and animations
+- **State Management**: React hooks (useState)
+- **API Communication**: Fetch API with FormData
+
+### AI/ML Stack
+- **LLMs**: OpenAI GPT-4o-mini for vision and structured extraction
+- **NLP**: Sentence-BERT for semantic embeddings
+- **ML**: Random Forest classifier for credibility scoring
+- **Computer Vision**: Tesseract OCR + GPT-4o-mini vision
+- **Vector DB**: FAISS for similarity search
+
+## Implementation Status
+
+| Agent | Status | Owner | Key Features |
+|-------|--------|-------|--------------|
+| Image Agent | ✅ FULL | Vivek | OCR + LLM vision, medical document extraction |
+| PDF Agent | ✅ FULL | Swapnil | PyPDF2 text extraction, metadata parsing |
+| Requirements Agent | ✅ FULL | Karthikeyan | LLM JSON extraction, FAISS duplicate detection |
+| Credibility Agent | ✅ FULL | Shruti | Random Forest ML model (91.8% accuracy) |
+| Billing Agent | 🟡 MOCK | Siri | Placeholder implementation |
+| Fraud Agent | 🟡 MOCK | Titash | Placeholder implementation |
+| Orchestrator | ✅ FULL | Aadithya | Weighted fusion, conditional logic, resume handling |
+
+## Recent Updates
+
+### v2.0 - Resume Functionality (Latest)
+- ✅ Added `/api/resume-claim` endpoint for HOLD claims
+- ✅ Frontend upload button for missing documents
+- ✅ Intelligent data merging from multiple documents
+- ✅ Iterative processing - upload until complete
+- ✅ Removed all debug logging for production
+
+### v1.5 - Enhanced Extraction
+- ✅ GPT-4o-mini vision integration for medical documents
+- ✅ Enhanced LLM prompts for OCR error handling
+- ✅ Improved regex patterns for fallback extraction
+- ✅ Hospital logo extraction from document headers
+- ✅ Fixed async/await issues in agent processing
+
+### v1.0 - Initial Release
+- ✅ Multi-agent pipeline with 6 specialized agents
+- ✅ Weighted decision fusion in orchestrator
+- ✅ Conditional halting for missing documents
+- ✅ Real-time progress tracking in frontend
+- ✅ Beautiful modern UI with animations
