@@ -155,7 +155,10 @@ FIELD EXTRACTION RULES:
 
 6. **discharge_date**: Look for "Date o Discharge" or "Date of Discharge"
 
-7. **total_claim_amount**: Look for billing amounts, currency symbols
+7. **total_claim_amount**: Look for:
+   - "Gross Total Rs:" followed by amount (most common in hospital bills)
+   - "Total Amount", "Claim Amount" with currency
+   - Any amount with INR/Rs/₹ symbols
 
 CRITICAL: Extract the actual name even if the label is garbled. If you see "Mr. MANIKANDAN B" anywhere in the text, that's the patient_name.
 
@@ -256,8 +259,10 @@ JSON Output:
                 r"Discharged\s+on[:\-]?\s*([^\n]+)",
             ],
             "total_claim_amount": [
-                r"(?:Total\s+)?(?:Claim\s+)?Amount[:\-]?\s*([^\n]+)",
-                r"Total[:\-]?\s*(?:INR|Rs\.?|₹)\s*([0-9,]+)",
+                r"Gross\s+Total\s+Rs[:\-]?\s*([0-9,]+(?:\.\d{2})?)",
+                r"(?:Total\s+)?(?:Claim\s+)?Amount[:\-]?\s*(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.\d{2})?)",
+                r"Total[:\-]?\s*(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.\d{2})?)",
+                r"(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.\d{2})?)",
             ],
         }
         
