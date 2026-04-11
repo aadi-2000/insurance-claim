@@ -86,19 +86,27 @@ class ImageProcessingAgent:
         }
     
     def extract_text_ocr(self, file_bytes: bytes) -> str:
-        """Extract text from image using OCR"""
+        """Extract text from image using OCR with enhanced preprocessing"""
         if not PIL_AVAILABLE or not TESSERACT_AVAILABLE:
             return ""
         
         try:
             image = Image.open(io.BytesIO(file_bytes))
-            text = pytesseract.image_to_string(image)
+            
+            # Convert to RGB if needed
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            
+            # Apply OCR with custom config for better accuracy on medical documents
+            custom_config = r'--oem 3 --psm 6'
+            text = pytesseract.image_to_string(image, config=custom_config)
+            
             return text.strip()
         except Exception as e:
             logger.warning(f"OCR extraction failed: {e}")
             return ""
     
-    def extract_text_llm(self, file_bytes: bytes, filename: str) -> str:
+    async def extract_text_llm(self, file_bytes: bytes, filename: str) -> str:
         """Extract text using LLM vision capabilities"""
         if not self.llm_client:
             return ""
@@ -107,20 +115,41 @@ class ImageProcessingAgent:
             # Encode image to base64
             base64_image = base64.b64encode(file_bytes).decode('utf-8')
             
-            prompt = """Analyze this medical document image and extract all visible text.
-Focus on:
-- Patient information
-- Hospital/clinic details
-- Diagnosis and treatment
-- Dates (admission, discharge)
-- Billing information
-- Doctor's name and credentials
+            prompt = """Analyze this medical discharge summary/document image and extract ALL visible text exactly as it appears.
 
-Return the extracted text in a structured format."""
+⚠️ CRITICAL - HOSPITAL LOGO/NAME:
+- Look at the TOP of the document for any hospital logo or name
+- Hospital names often appear as logos with text (e.g., "Apollo Hospitals")
+- Extract the EXACT hospital name from the logo/header
+- Common hospitals: Apollo Hospitals, Fortis, Max Healthcare, etc.
+
+Extract every detail including:
+- **HOSPITAL NAME** (from logo/header at top - VERY IMPORTANT)
+- UHID/Patient Identifier
+- Patient Name (look for "Name:" field, often with Mr./Mrs./Ms.)
+- Age, Sex, Address
+- Department (e.g., ORTHOPAEDICS)
+- Ward/Bed Number
+- Admission Date, Surgery Date, Discharge Date
+- Primary Consultant/Doctor details
+- Diagnosis (complete medical terms)
+- Surgery/Procedure performed
+- Chief Complaints and History
+- Allergies
+- Any billing/claim amounts
+- All dates in the format shown
+- Any policy or insurance numbers
+
+IMPORTANT: Pay special attention to the hospital name in the logo at the top of the document.
+
+Return ALL the text you can see in the image, preserving the structure and details. Be thorough and extract everything visible."""
             
             # Use LLM with vision capabilities (GPT-4V, Claude Vision, etc.)
-            response = self.llm_client.generate_with_image(prompt, base64_image)
-            return response
+            response = await self.llm_client.complete_with_vision(
+                messages=[{"role": "user", "content": prompt}],
+                images=[base64_image]
+            )
+            return response.get("content", "")
         except Exception as e:
             logger.warning(f"LLM vision extraction failed: {e}")
             return ""
@@ -160,7 +189,7 @@ Return the extracted text in a structured format."""
         llm_text = ""
         if self.llm_client:
             reasoning.append("Running LLM-based vision extraction")
-            llm_text = self.extract_text_llm(file_bytes, filename)
+            llm_text = await self.extract_text_llm(file_bytes, filename)
             if llm_text:
                 reasoning.append("LLM vision extraction completed")
         

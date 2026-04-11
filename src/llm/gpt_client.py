@@ -59,7 +59,7 @@ class GPTClient(BaseLLMClient):
                                     system_prompt: Optional[str] = None,
                                     **kwargs) -> Dict[str, Any]:
         """Send a vision completion request with base64 images."""
-        vision_model = kwargs.get("model", "gpt-4o")
+        vision_model = kwargs.get("model", "gpt-4o-mini")  # Use gpt-4o-mini which has vision support
         content = []
         for img_b64 in images:
             content.append({
