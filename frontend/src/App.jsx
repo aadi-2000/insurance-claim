@@ -51,7 +51,7 @@ const AgentCard = ({ result, index }) => {
 const MetricBox = ({ label, value, color = "#06b6d4", sub = "" }) => (
   <div style={{ background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12, padding: "18px 20px", flex: "1 1 160px", minWidth: 160 }}>
     <div style={{ color: "#64748b", fontSize: 11, fontFamily: "mono", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
-    <div style={{ color, fontSize: 26, fontWeight: 700, fontFamily: "mono" }}>{value}</div>
+    <div style={{ color, fontSize: 20, fontWeight: 700, fontFamily: "mono", wordBreak: "break-word", lineHeight: 1.2 }}>{value}</div>
     {sub && <div style={{ color: "#475569", fontSize: 11, marginTop: 4 }}>{sub}</div>}
   </div>
 );
@@ -83,24 +83,14 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   const agentPipeline = [
-    { key: "image", name: "Image Processing", icon: "🖼️", owner: "Vivek" },
-    { key: "pdf", name: "PDF Extraction", icon: "📄", owner: "Swapnil" },
-    { key: "requirements", name: "Requirements Check", icon: "📋", owner: "Karthikeyan" },
-    { key: "credibility", name: "Credibility & Policy", icon: "🔍", owner: "Shruti" },
-    { key: "billing", name: "Billing Analysis", icon: "💰", owner: "Siri" },
-    { key: "fraud", name: "Fraud Detection", icon: "🛡️", owner: "Titash" },
-    { key: "orchestrator", name: "Orchestrator", icon: "🎯", owner: "Aadithya" },
+    { key: "image", name: "Image Processing", icon: "🖼️", owner: "Vivek Vardhan" },
+    { key: "pdf", name: "PDF Extraction", icon: "📄", owner: "Swapnil Sontakke" },
+    { key: "requirements", name: "Requirements Check", icon: "📋", owner: "Karthikeyan Pillai" },
+    { key: "credibility", name: "Credibility & Policy", icon: "🔍", owner: "Shruti Roy" },
+    { key: "billing", name: "Billing Analysis", icon: "💰", owner: "Siri Spandana" },
+    { key: "fraud", name: "Fraud Detection", icon: "🛡️", owner: "Titash Bhattacharya" },
+    { key: "orchestrator", name: "Orchestrator", icon: "🎯", owner: "Aadithya Pabbisetty" },
   ];
-
-  const checkBackend = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/health`);
-      const data = await res.json();
-      setBackendStatus(data);
-    } catch {
-      setBackendStatus({ status: "offline" });
-    }
-  };
 
   const handleFiles = (newFiles) => setFiles((prev) => [...prev, ...Array.from(newFiles)]);
   const handleDrop = (e) => { e.preventDefault(); setDragActive(false); handleFiles(e.dataTransfer.files); };
@@ -130,22 +120,34 @@ export default function App() {
       const data = await res.json();
       
       if (data.status === "still_hold") {
-        // Still missing fields
+        // Still missing fields - update result with merged data
         setProgress(100);
         setProcessingStatus(`Still missing: ${data.missing_fields.join(", ")}`);
-        alert(`Additional documents received, but still missing: ${data.missing_fields.join(", ")}\n\nPlease upload documents containing this information.`);
+        
+        // Update result to show merged extracted fields
+        setResult(prev => ({
+          ...prev,
+          claim_summary: {
+            ...prev.claim_summary,
+            ...data.extracted_fields,
+            status: "PENDING_DOCUMENTS",
+            missing_fields: data.missing_fields,
+            action_required: "Please upload documents containing the missing information"
+          }
+        }));
+        
         setStage("results"); // Stay on results page
       } else {
         // Requirements met, processing completed
         setResult(data.result);
         setProgress(100);
+        setProcessingStatus(""); // Clear status message
         setStage("results");
       }
     } catch (e) {
       clearInterval(progressInterval);
       setProcessingStatus(`Error: ${e.message}`);
       setProgress(0);
-      alert(`Resume failed: ${e.message}`);
     }
   };
 
@@ -192,6 +194,7 @@ export default function App() {
       const data = await res.json();
       setResult(data.result);
       setProgress(100);
+      setProcessingStatus(""); // Clear the waiting message
       setStage("results");
     } catch (e) {
       clearInterval(progressInterval);
@@ -246,9 +249,6 @@ export default function App() {
           {stage !== "upload" && (
             <button onClick={resetApp} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "mono" }}>↺ New Claim</button>
           )}
-          <button onClick={checkBackend} style={{ background: "rgba(6,182,212,0.1)", border: "1px solid rgba(6,182,212,0.3)", color: "#06b6d4", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 11, fontFamily: "mono" }}>
-            {backendStatus?.status === "healthy" ? "● Backend Online" : backendStatus?.status === "offline" ? "○ Backend Offline" : "⟳ Check Backend"}
-          </button>
         </div>
       </header>
 
@@ -336,11 +336,140 @@ export default function App() {
             {/* Decision Banner */}
             <div style={{ background: `${decisionColors[result.decision]}11`, border: `2px solid ${decisionColors[result.decision]}44`, borderRadius: 16, padding: "28px 32px", marginBottom: 24, textAlign: "center" }}>
               <div style={{ fontSize: 42, fontWeight: 800, color: decisionColors[result.decision], letterSpacing: -1, marginBottom: 8 }}>
-                {result.decision === "APPROVE" ? "✅" : result.decision === "REJECT" ? "❌" : "⚠️"} CLAIM {result.decision}
+                {result.decision === "APPROVE" ? "✅" : result.decision === "REJECT" ? "❌" : result.decision === "REVIEW" ? "⚠️" : "⏸️"} CLAIM {result.decision}
               </div>
-              <div style={{ color: "#94a3b8", fontSize: 14, maxWidth: 700, margin: "0 auto", lineHeight: 1.7 }}>
+              
+              {/* Fraud Category Badge (if applicable) */}
+              {result.claim_summary?.fraud_category && result.claim_summary.fraud_category !== "NONE" && (
+                <div style={{ 
+                  display: "inline-block",
+                  padding: "6px 16px",
+                  borderRadius: 20,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  fontFamily: "mono",
+                  marginBottom: 12,
+                  background: result.claim_summary.fraud_category === "DUPLICATE_CLAIM" ? "rgba(245,158,11,0.15)" :
+                              result.claim_summary.fraud_category === "FRAUD" ? "rgba(239,68,68,0.15)" :
+                              "rgba(249,115,22,0.15)",
+                  color: result.claim_summary.fraud_category === "DUPLICATE_CLAIM" ? "#f59e0b" :
+                         result.claim_summary.fraud_category === "FRAUD" ? "#ef4444" :
+                         "#f97316",
+                  border: `1px solid ${result.claim_summary.fraud_category === "DUPLICATE_CLAIM" ? "#f59e0b" :
+                                       result.claim_summary.fraud_category === "FRAUD" ? "#ef4444" :
+                                       "#f97316"}44`
+                }}>
+                  {result.claim_summary.fraud_category === "DUPLICATE_CLAIM" ? "🔄 Duplicate Claim" :
+                   result.claim_summary.fraud_category === "FRAUD" ? "🚨 Fraud Detected" :
+                   "⚠️ Suspicious Activity"}
+                </div>
+              )}
+              
+              <div style={{ color: "#94a3b8", fontSize: 14, maxWidth: 700, margin: "0 auto", lineHeight: 1.7, marginBottom: result.decision !== "HOLD" ? 16 : 0 }}>
                 {result.processing_summary?.ai_summary || result.decision_reasons?.join(". ")}
+                
+                {/* Show fraud type details if available */}
+                {result.claim_summary?.fraud_type_details && result.claim_summary.fraud_type_details.length > 0 && (
+                  <div style={{ marginTop: 12, padding: "12px 16px", background: "rgba(239,68,68,0.1)", borderRadius: 8, border: "1px solid rgba(239,68,68,0.2)" }}>
+                    <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, marginBottom: 6 }}>⚠️ Fraud Indicators:</div>
+                    {result.claim_summary.fraud_type_details.map((detail, i) => (
+                      <div key={i} style={{ color: "#fca5a5", fontSize: 12, marginLeft: 8 }}>• {detail}</div>
+                    ))}
+                  </div>
+                )}
               </div>
+              
+              {/* Action Buttons - Show for all decisions except HOLD */}
+              {result.decision !== "HOLD" && (
+                <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+                  {/* Approve Button */}
+                  <button 
+                    onClick={async () => {
+                      try {
+                        setProcessingStatus("Storing approved claim in history database...");
+                        const response = await fetch(`${API_BASE}/approve-claim`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(result),
+                        });
+                        const data = await response.json();
+                        if (data.success) {
+                          setProcessingStatus(`✅ Claim approved and stored! ID: ${data.claim_id}`);
+                          setTimeout(() => setProcessingStatus(""), 3000);
+                        } else {
+                          setProcessingStatus(`❌ Failed to store claim: ${data.detail || "Unknown error"}`);
+                        }
+                      } catch (e) {
+                        setProcessingStatus(`❌ Error: ${e.message}`);
+                      }
+                    }}
+                    style={{
+                      background: "linear-gradient(135deg, #10b981, #059669)",
+                      border: "none",
+                      color: "#fff",
+                      padding: "12px 32px",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      fontFamily: "mono",
+                      boxShadow: "0 4px 12px rgba(16,185,129,0.3)",
+                      transition: "all 0.2s"
+                    }}
+                    onMouseOver={(e) => e.target.style.transform = "translateY(-2px)"}
+                    onMouseOut={(e) => e.target.style.transform = "translateY(0)"}
+                  >
+                    ✓ Approve
+                  </button>
+                  
+                  {/* Reject Button */}
+                  <button 
+                    onClick={async () => {
+                      try {
+                        setProcessingStatus("Storing rejected claim in history database...");
+                        const response = await fetch(`${API_BASE}/reject-claim`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(result),
+                        });
+                        const data = await response.json();
+                        if (data.success) {
+                          setProcessingStatus(`✅ Claim rejected and stored! ID: ${data.claim_id}`);
+                          setTimeout(() => setProcessingStatus(""), 3000);
+                        } else {
+                          setProcessingStatus(`❌ Failed to store claim: ${data.detail || "Unknown error"}`);
+                        }
+                      } catch (e) {
+                        setProcessingStatus(`❌ Error: ${e.message}`);
+                      }
+                    }}
+                    style={{
+                      background: "linear-gradient(135deg, #ef4444, #dc2626)",
+                      border: "none",
+                      color: "#fff",
+                      padding: "12px 32px",
+                      borderRadius: 10,
+                      cursor: "pointer",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      fontFamily: "mono",
+                      boxShadow: "0 4px 12px rgba(239,68,68,0.3)",
+                      transition: "all 0.2s"
+                    }}
+                    onMouseOver={(e) => e.target.style.transform = "translateY(-2px)"}
+                    onMouseOut={(e) => e.target.style.transform = "translateY(0)"}
+                  >
+                    ✗ Reject
+                  </button>
+                </div>
+              )}
+              
+              {/* Status message */}
+              {processingStatus && (
+                <div style={{ marginTop: 12, color: processingStatus.includes("✅") ? "#10b981" : "#ef4444", fontSize: 13, fontFamily: "mono" }}>
+                  {processingStatus}
+                </div>
+              )}
             </div>
 
             {/* Metrics */}
@@ -349,6 +478,28 @@ export default function App() {
               <MetricBox label="Amount Approved" value={`₹${((result.claim_summary?.amount_approved || 0) / 1000).toFixed(0)}K`} color="#10b981" sub={`₹${(result.claim_summary?.amount_approved || 0).toLocaleString("en-IN")}`} />
               <MetricBox label="Confidence" value={`${((result.weighted_confidence || 0) * 100).toFixed(1)}%`} color="#06b6d4" sub="Weighted average" />
               <MetricBox label="Fraud Score" value={(result.claim_summary?.fraud_score || 0).toFixed(2)} color={(result.claim_summary?.fraud_score || 0) > 0.3 ? "#ef4444" : "#10b981"} sub={(result.claim_summary?.fraud_score || 0) > 0.3 ? "Elevated" : "Very Low Risk"} />
+              <MetricBox 
+                label="Fraud Category" 
+                value={
+                  result.claim_summary?.fraud_category === "DUPLICATE_CLAIM" ? "Duplicate Claim" :
+                  result.claim_summary?.fraud_category === "SUSPICIOUS" ? "Suspicious" :
+                  result.claim_summary?.fraud_category === "FRAUD" ? "Fraud" :
+                  result.claim_summary?.fraud_category === "NONE" ? "None" :
+                  result.claim_summary?.fraud_category || "None"
+                } 
+                color={
+                  result.claim_summary?.fraud_category === "DUPLICATE_CLAIM" ? "#f59e0b" :
+                  result.claim_summary?.fraud_category === "FRAUD" ? "#ef4444" :
+                  result.claim_summary?.fraud_category === "SUSPICIOUS" ? "#f97316" :
+                  "#10b981"
+                } 
+                sub={
+                  result.claim_summary?.fraud_category === "DUPLICATE_CLAIM" ? "Duplicate Detected" :
+                  result.claim_summary?.fraud_category === "FRAUD" ? "High Risk" :
+                  result.claim_summary?.fraud_category === "SUSPICIOUS" ? "Needs Review" :
+                  "Clean"
+                } 
+              />
               <MetricBox label="Processing" value={result.processing_summary?.orchestrator_time || "N/A"} color="#8b5cf6" sub={`${result.processing_summary?.agents_passed}/${result.processing_summary?.total_agents} agents passed`} />
             </div>
 
@@ -410,14 +561,22 @@ export default function App() {
                   </div>
                 )}
                 
-                {Object.entries(result.claim_summary || {}).map(([key, value]) => (
-                  <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(148,163,184,0.06)" }}>
-                    <span style={{ color: "#64748b", fontSize: 13, fontFamily: "mono", textTransform: "uppercase" }}>{key.replace(/_/g, " ")}</span>
-                    <span style={{ color: "#e2e8f0", fontSize: 13, fontFamily: "mono", fontWeight: 500 }}>
-                      {typeof value === "number" ? (key.includes("amount") ? `₹${value.toLocaleString("en-IN")}` : value.toFixed(2)) : String(value)}
-                    </span>
-                  </div>
-                ))}
+                {Object.entries(result.claim_summary || {})
+                  .filter(([key]) => !['status', 'missing_fields', 'action_required', 'claim_id'].includes(key))
+                  .map(([key, value]) => {
+                    // Skip null/undefined values
+                    if (value === null || value === undefined) return null;
+                    
+                    return (
+                      <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid rgba(148,163,184,0.06)" }}>
+                        <span style={{ color: "#64748b", fontSize: 13, fontFamily: "mono", textTransform: "uppercase" }}>{key.replace(/_/g, " ")}</span>
+                        <span style={{ color: "#e2e8f0", fontSize: 13, fontFamily: "mono", fontWeight: 500 }}>
+                          {typeof value === "number" ? (key.includes("amount") ? `₹${value.toLocaleString("en-IN")}` : value.toFixed(2)) : String(value)}
+                        </span>
+                      </div>
+                    );
+                  })
+                }
                 <div style={{ marginTop: 20, padding: 16, background: "rgba(0,0,0,0.3)", borderRadius: 8 }}>
                   <div style={{ color: "#64748b", fontSize: 12, marginBottom: 8 }}>Decision Reasons:</div>
                   {(result.decision_reasons || []).map((r, i) => (

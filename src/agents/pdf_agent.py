@@ -36,6 +36,23 @@ except ImportError:
     PYPDF2_AVAILABLE = False
     logger.warning("PyPDF2 not available - using fallback PDF processing")
 
+try:
+    from pdf2image import convert_from_bytes
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+    logger.warning("pdf2image not available - scanned PDF OCR will be limited")
+
+try:
+    from PIL import Image
+    import pytesseract
+    PIL_AVAILABLE = True
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    TESSERACT_AVAILABLE = False
+    logger.warning("PIL/pytesseract not available - OCR disabled for scanned PDFs")
+
 
 class PDFProcessingAgent:
     """PDF Processing Agent - Extracts and indexes text from PDF documents."""
@@ -84,8 +101,35 @@ class PDFProcessingAgent:
             "hash": hashlib.md5(file_bytes).hexdigest(),
         }
     
+    def extract_text_from_scanned_pdf(self, file_bytes: bytes) -> str:
+        """Extract text from scanned PDF using OCR"""
+        if not PDF2IMAGE_AVAILABLE or not TESSERACT_AVAILABLE:
+            return ""
+        
+        try:
+            # Convert PDF pages to images
+            images = convert_from_bytes(file_bytes)
+            
+            all_text = []
+            for page_num, image in enumerate(images):
+                # Convert to RGB if needed
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                
+                # Run OCR on the image
+                custom_config = r'--oem 3 --psm 6'
+                text = pytesseract.image_to_string(image, config=custom_config)
+                
+                if text.strip():
+                    all_text.append(f"--- Page {page_num + 1} ---\n{text}")
+            
+            return "\n\n".join(all_text)
+        except Exception as e:
+            logger.warning(f"Scanned PDF OCR extraction failed: {e}")
+            return ""
+    
     def extract_text_from_pdf(self, file_bytes: bytes) -> str:
-        """Extract all text from PDF"""
+        """Extract all text from PDF - tries text extraction first, then OCR for scanned PDFs"""
         if not PYPDF2_AVAILABLE:
             return ""
         
@@ -98,7 +142,18 @@ class PDFProcessingAgent:
                 if text:
                     all_text.append(f"--- Page {page_num + 1} ---\n{text}")
             
-            return "\n\n".join(all_text)
+            extracted_text = "\n\n".join(all_text)
+            
+            # If no text extracted (scanned PDF), try OCR
+            if not extracted_text.strip():
+                logger.info("No text extracted from PDF - attempting OCR on scanned pages")
+                print("\n⚠️ PDF appears to be scanned (no extractable text)")
+                print("🔍 Running OCR on PDF pages...")
+                extracted_text = self.extract_text_from_scanned_pdf(file_bytes)
+                if extracted_text:
+                    print(f"✅ OCR extracted {len(extracted_text)} characters from scanned PDF")
+            
+            return extracted_text
         except Exception as e:
             logger.warning(f"PDF text extraction failed: {e}")
             return ""
@@ -167,9 +222,19 @@ class PDFProcessingAgent:
             reasoning.append("Extracting text from PDF using PyPDF2")
             extracted_text = self.extract_text_from_pdf(file_bytes)
             reasoning.append(f"Extracted {len(extracted_text)} characters from PDF")
+            
+            print(f"\n📄 PDF EXTRACTION - {filename}")
+            print(f"  Pages: {metadata.get('num_pages', 0)}")
+            print(f"  Text extracted: {len(extracted_text)} characters")
+            print("\n📝 PDF TEXT CONTENT (first 500 chars):")
+            print("-"*80)
+            print(extracted_text[:500])
+            print("-"*80)
         else:
             reasoning.append("PyPDF2 not available - using fallback mode")
             extracted_text = ""
+            print(f"\n⚠️ PDF EXTRACTION - {filename}")
+            print("  PyPDF2 not available - no text extracted")
         
         # Step 3: Identify sections
         sections = []

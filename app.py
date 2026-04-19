@@ -17,7 +17,7 @@ import asyncio
 import time
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -34,6 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv()
 
 from src.utils.logger import setup_logging
+from src.utils.claim_history import ClaimHistoryDatabase
 from src.llm.gpt_client import GPTClient
 from src.agents.image_agent import ImageProcessingAgent
 from src.agents.pdf_agent import PDFProcessingAgent
@@ -50,10 +51,13 @@ from src.handlers.error_handler import handle_agent_error
 setup_logging()
 logger = logging.getLogger("insurance_claim_ai")
 
+# In-memory session storage for resume functionality
+# Maps claim_id -> {image_result, pdf_result, extracted_requirements}
+claim_sessions = {}
+
 app = FastAPI(
     title="ClaimFlow AI",
     description="Multi-Agent Insurance Claim Processing System",
-    version="1.0.0",
 )
 
 # CORS for React frontend
@@ -77,6 +81,10 @@ if API_KEY:
     except Exception as e:
         logger.warning(f"Could not initialize GPT client: {e}")
 
+# Initialize claim history database for fraud detection
+logger.info("Initializing claim history database...")
+claim_history_db = ClaimHistoryDatabase(storage_dir="data/claim_history")
+
 # Initialize all agents
 agents = {
     "image": ImageProcessingAgent(llm_client=llm_client),
@@ -84,10 +92,10 @@ agents = {
     "requirements": RequirementsAgent(llm_client=llm_client),
     "credibility": CredibilityAgent(llm_client=llm_client),
     "billing": BillingAgent(llm_client=llm_client),
-    "fraud": FraudDetectionAgent(llm_client=llm_client),
+    "fraud": FraudDetectionAgent(llm_client=llm_client, claim_history_db=claim_history_db),
 }
 
-orchestrator = OrchestratorAgent(llm_client=llm_client)
+orchestrator = OrchestratorAgent(llm_client=llm_client, claim_history_db=claim_history_db)
 
 # Serve frontend static files if built
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
@@ -146,6 +154,151 @@ async def get_config():
         return {"config": "Config not loaded"}
 
 
+@app.get("/api/claim-history/stats")
+async def get_claim_history_stats():
+    """Get statistics about the claim history database."""
+    try:
+        stats = claim_history_db.get_claim_statistics()
+        return {
+            "success": True,
+            "statistics": stats,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get claim history stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve statistics: {str(e)}")
+
+
+@app.post("/api/approve-claim")
+async def approve_claim(claim_data: Dict[str, Any]):
+    """
+    Manually approve a claim and store it in the RAG database.
+    
+    This endpoint allows manual approval of claims that may have been
+    flagged for review, storing them in the claim history for future
+    fraud detection.
+    """
+    try:
+        # Extract claim information - handle both claim_summary structure
+        claim_summary = claim_data.get("claim_summary", {})
+        
+        # Build extracted_data with all available fields
+        # Map orchestrator field names to RAG database field names
+        extracted_data = {
+            "patient_name": claim_summary.get("patient_name") or claim_summary.get("patient"),
+            "policy_number": claim_summary.get("policy_number") or claim_summary.get("policy") or claim_summary.get("patient_id"),
+            "hospital_name": claim_summary.get("hospital_name") or claim_summary.get("hospital"),
+            "diagnosis": claim_summary.get("diagnosis"),
+            "admission_date": claim_summary.get("admission_date"),
+            "discharge_date": claim_summary.get("discharge_date"),
+            "total_claim_amount": claim_summary.get("total_claim_amount") or claim_summary.get("amount_claimed"),
+        }
+        
+        # Remove None values
+        extracted_data = {k: v for k, v in extracted_data.items() if v is not None}
+        
+        decision = "APPROVE"
+        decision_reasons = claim_data.get("decision_reasons", ["Manually approved by reviewer"])
+        
+        # Validate required fields
+        required_fields = ["patient_name", "policy_number", "hospital_name", "diagnosis"]
+        missing = [f for f in required_fields if not extracted_data.get(f)]
+        
+        if missing:
+            logger.error(f"Missing fields in approve request: {missing}")
+            logger.error(f"Received claim_summary: {claim_summary}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Missing required fields: {', '.join(missing)}"
+            )
+        
+        # Store in claim history database
+        claim_id = claim_history_db.add_claim(
+            claim_data=extracted_data,
+            decision=decision,
+            decision_reasons=decision_reasons
+        )
+        
+        logger.info(f"✅ Manually approved claim stored: {claim_id}")
+        
+        return {
+            "success": True,
+            "message": "Claim approved and stored in history database",
+            "claim_id": claim_id,
+            "decision": decision,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to approve claim: {e}")
+        raise HTTPException(status_code=500, detail=f"Approval failed: {str(e)}")
+
+
+@app.post("/api/reject-claim")
+async def reject_claim(claim_data: Dict[str, Any]):
+    """
+    Manually reject a claim and store it in the RAG database.
+    
+    This endpoint allows manual rejection of claims, storing them in the
+    claim history for future fraud detection and pattern analysis.
+    """
+    try:
+        # Extract claim information - handle both claim_summary structure
+        claim_summary = claim_data.get("claim_summary", {})
+        
+        # Build extracted_data with all available fields
+        # Map orchestrator field names to RAG database field names
+        extracted_data = {
+            "patient_name": claim_summary.get("patient_name") or claim_summary.get("patient"),
+            "policy_number": claim_summary.get("policy_number") or claim_summary.get("policy") or claim_summary.get("patient_id"),
+            "hospital_name": claim_summary.get("hospital_name") or claim_summary.get("hospital"),
+            "diagnosis": claim_summary.get("diagnosis"),
+            "admission_date": claim_summary.get("admission_date"),
+            "discharge_date": claim_summary.get("discharge_date"),
+            "total_claim_amount": claim_summary.get("total_claim_amount") or claim_summary.get("amount_claimed"),
+        }
+        
+        # Remove None values
+        extracted_data = {k: v for k, v in extracted_data.items() if v is not None}
+        
+        decision = "REJECT"
+        decision_reasons = claim_data.get("decision_reasons", ["Manually rejected by reviewer"])
+        
+        # Validate required fields
+        required_fields = ["patient_name", "policy_number", "hospital_name", "diagnosis"]
+        missing = [f for f in required_fields if not extracted_data.get(f)]
+        
+        if missing:
+            logger.error(f"Missing fields in reject request: {missing}")
+            logger.error(f"Received claim_summary: {claim_summary}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Missing required fields: {', '.join(missing)}"
+            )
+        
+        # Store in claim history database
+        claim_id = claim_history_db.add_claim(
+            claim_data=extracted_data,
+            decision=decision,
+            decision_reasons=decision_reasons
+        )
+        
+        logger.info(f"❌ Manually rejected claim stored: {claim_id}")
+        
+        return {
+            "success": True,
+            "message": "Claim rejected and stored in history database",
+            "claim_id": claim_id,
+            "decision": decision,
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to reject claim: {e}")
+        raise HTTPException(status_code=500, detail=f"Rejection failed: {str(e)}")
+
+
 @app.post("/api/process-claim")
 async def process_claim(files: List[UploadFile] = File(...)):
     """
@@ -160,31 +313,64 @@ async def process_claim(files: List[UploadFile] = File(...)):
     logger.info(f"Processing claim with {len(files)} file(s)")
     start_time = time.time()
 
-    # Read first file (primary document)
-    primary_file = files[0]
-    file_bytes = await primary_file.read()
-    filename = primary_file.filename or "document"
-    mime_type = primary_file.content_type or "application/octet-stream"
-
-    logger.info(f"Primary file: {filename} ({mime_type}, {len(file_bytes)} bytes)")
-
     try:
-        # Run the orchestrator pipeline
+        # Process all uploaded files
+        all_results = {"image": {}, "pdf": {}}
+        
+        for uploaded_file in files:
+            file_bytes = await uploaded_file.read()
+            filename = uploaded_file.filename or "document"
+            mime_type = uploaded_file.content_type or "application/octet-stream"
+            
+            logger.info(f"Processing file: {filename} ({mime_type}, {len(file_bytes)} bytes)")
+            
+            # Process based on file type
+            if mime_type.startswith("image/"):
+                result = await agents["image"].process(file_bytes, filename, mime_type)
+                # Merge with existing image results
+                if all_results["image"] and all_results["image"].get("output"):
+                    existing_text = all_results["image"].get("output", {}).get("extracted_text", "")
+                    new_text = result.get("output", {}).get("extracted_text", "")
+                    result["output"]["extracted_text"] = existing_text + "\n\n" + new_text
+                all_results["image"] = result
+                
+            elif mime_type == "application/pdf":
+                result = await agents["pdf"].process(file_bytes, filename)
+                # Merge with existing PDF results
+                if all_results["pdf"] and all_results["pdf"].get("output"):
+                    existing_text = all_results["pdf"].get("output", {}).get("extracted_text", "")
+                    new_text = result.get("output", {}).get("extracted_text", "")
+                    result["output"]["extracted_text"] = existing_text + "\n\n" + new_text
+                all_results["pdf"] = result
+        
+        # Run the orchestrator pipeline with combined results
         reasoning_log = []
 
         def on_log(msg):
             reasoning_log.append(msg)
 
-        result = await orchestrator.run_pipeline(
+        result = await orchestrator.run_pipeline_with_results(
             agents=agents,
-            file_bytes=file_bytes,
-            filename=filename,
-            mime_type=mime_type,
+            image_result=all_results.get("image", {}),
+            pdf_result=all_results.get("pdf", {}),
             on_log=on_log,
         )
 
         elapsed = time.time() - start_time
         logger.info(f"Claim processed in {elapsed:.1f}s - Decision: {result.decision}")
+
+        # Store session data for resume functionality if claim is on HOLD
+        if result.status == "pending_documents":
+            claim_id = result.claim_summary.get("claim_id", f"claim_{int(time.time())}")
+            claim_sessions[claim_id] = {
+                "image_result": all_results.get("image", {}),
+                "pdf_result": all_results.get("pdf", {}),
+                "extracted_requirements": result.claim_summary,
+                "timestamp": time.time()
+            }
+            logger.info(f"✅ Stored session data for claim {claim_id}")
+            logger.info(f"   Extracted fields: {list(result.claim_summary.keys())}")
+            logger.info(f"   Diagnosis value: {result.claim_summary.get('diagnosis')}")
 
         return JSONResponse(content={
             "success": True,
@@ -211,8 +397,20 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
     logger.info(f"Resuming claim {claim_id} with {len(files)} additional file(s)")
     start_time = time.time()
     
-    # Process all uploaded files (could be multiple for missing fields)
-    all_results = {"image": {}, "pdf": {}}
+    # Retrieve previous session data
+    previous_session = claim_sessions.get(claim_id, {})
+    if previous_session:
+        logger.info(f"✅ Found previous session data for claim {claim_id}")
+        logger.info(f"   Previous diagnosis: {previous_session.get('extracted_requirements', {}).get('diagnosis')}")
+    else:
+        logger.warning(f"⚠️ No previous session found for claim {claim_id}")
+        logger.info(f"   Available sessions: {list(claim_sessions.keys())}")
+    
+    # Start with previous results or empty
+    all_results = {
+        "image": previous_session.get("image_result", {}),
+        "pdf": previous_session.get("pdf_result", {})
+    }
     
     for uploaded_file in files:
         file_bytes = await uploaded_file.read()
@@ -247,49 +445,80 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
             all_results.get("pdf", {})
         )
         
-        # Check if requirements are now met
-        requirements_met = requirements_result.get("output", {}).get("requirements_met", False)
-        missing_fields = requirements_result.get("output", {}).get("missing_fields", [])
+        # Merge with previous extracted requirements to preserve fields from first upload
+        previous_extracted = previous_session.get("extracted_requirements", {})
+        newly_extracted = requirements_result.get("output", {}).get("extracted_requirements", {})
+        
+        # Merge: keep previous values, add new values, prefer new if both exist
+        merged_requirements = {}
+        for field in ["patient_name", "policy_number", "hospital_name", "diagnosis", 
+                      "admission_date", "discharge_date", "total_claim_amount"]:
+            # Use new value if present, otherwise use previous value
+            if newly_extracted.get(field):
+                merged_requirements[field] = newly_extracted[field]
+            elif previous_extracted.get(field):
+                merged_requirements[field] = previous_extracted[field]
+            else:
+                merged_requirements[field] = None
+        
+        # Update requirements result with merged data
+        requirements_result["output"]["extracted_requirements"] = merged_requirements
+        
+        # Recalculate missing fields based on merged requirements
+        missing_fields = [f for f in ["patient_name", "policy_number", "hospital_name", "diagnosis",
+                                       "admission_date", "discharge_date", "total_claim_amount"]
+                          if not merged_requirements.get(f)]
+        requirements_met = len(missing_fields) == 0
+        requirements_result["output"]["requirements_met"] = requirements_met
+        requirements_result["output"]["missing_fields"] = missing_fields
         
         if not requirements_met:
-            # Still missing fields - return HOLD again
+            # Still missing fields - update session and return HOLD again
             elapsed = time.time() - start_time
             logger.info(f"Claim still on HOLD - missing: {missing_fields}")
+            
+            # Update session with merged data
+            extracted_reqs = requirements_result.get("output", {}).get("extracted_requirements", {})
+            claim_sessions[claim_id] = {
+                "image_result": all_results.get("image", {}),
+                "pdf_result": all_results.get("pdf", {}),
+                "extracted_requirements": extracted_reqs,
+                "timestamp": time.time()
+            }
             
             return JSONResponse(content={
                 "success": True,
                 "status": "still_hold",
                 "missing_fields": missing_fields,
+                "extracted_fields": extracted_reqs,
                 "message": "Additional documents received but some fields are still missing",
                 "total_time": f"{elapsed:.1f}s",
             })
         
-        # Requirements met - continue with full pipeline
+        # Requirements met - continue with full pipeline using orchestrator
         logger.info("Requirements now met - continuing with full pipeline")
         
-        # Prepare combined results for remaining agents
-        combined_results = {
+        # Use orchestrator's _continue_pipeline to run remaining agents
+        reasoning_log = []
+        def on_log(msg):
+            reasoning_log.append(msg)
+        
+        # Build results dict with image, pdf, and requirements
+        results = {
             "image": all_results.get("image", {}),
             "pdf": all_results.get("pdf", {}),
             "requirements": requirements_result
         }
         
-        # Run remaining agents (Credibility, Billing, Fraud)
-        reasoning_log = []
-        def on_log(msg):
-            reasoning_log.append(msg)
-        
-        # Credibility Agent
-        combined_results["credibility"] = await agents["credibility"].process(combined_results)
-        
-        # Billing Agent
-        combined_results["billing"] = await agents["billing"].process(combined_results)
-        
-        # Fraud Agent
-        combined_results["fraud"] = await agents["fraud"].process(combined_results)
-        
-        # Final decision fusion
-        final_result = await orchestrator._fuse_decision(combined_results, reasoning_log)
+        # Continue pipeline from Credibility agent onwards
+        # This will run Credibility, Billing, Fraud, and do final decision fusion
+        final_result = await orchestrator._continue_pipeline(
+            agents=agents,
+            results=results,
+            log_messages=reasoning_log,
+            start_time=start_time,
+            log=on_log
+        )
         
         elapsed = time.time() - start_time
         logger.info(f"Resumed claim processed in {elapsed:.1f}s - Decision: {final_result.decision}")
