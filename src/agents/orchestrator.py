@@ -974,6 +974,7 @@ class OrchestratorAgent:
         billing_anomaly_score=billing_output.get("anomaly_score",0)
         billing_deductions = billing_output.get("deductions",0)
         print("[orchestrator][claim summary] billing anomaly", billing_anomaly_score)
+        print("[orchestrator][claim summary] billing breakdown", billing_breakdown)
         return {
             "patient": extracted_reqs.get("patient_name") or self._safe_get(results, "image", "output", "patient_name", default="N/A"),
             "patient_id": extracted_reqs.get("policy_number") or self._safe_get(results, "image", "output", "patient_id", default="N/A"),

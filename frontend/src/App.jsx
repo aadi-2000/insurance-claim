@@ -561,9 +561,90 @@ export default function App() {
                   </div>
                 )}
 
-                
+                {/* Adding Billing details. Modified by Spandana */}
+                {/* Billing Details */}
+                {result?.claim_summary && (
+                <div style={{
+                marginTop: 24,
+                marginBottom: 24,
+                padding: 20,
+                background: "rgba(15,23,42,0.55)",
+                border: "1px solid rgba(6,182,212,0.2)",
+                borderRadius: 12
+                }}>
+                <h3 style={{
+                color: "#e2e8f0",
+                fontSize: 16,
+                fontWeight: 700,
+                marginBottom: 16
+                }}>
+                Billing Details
+                </h3>
+
+                <div style={{ marginBottom: 16 }}>
+                <div style={{ color: "#cbd5e1", marginBottom: 6 }}>
+                Billing Anomaly Score: {Number(result.claim_summary.billing_anomaly_score || 0).toFixed(2)}
+                </div>
+                <div style={{ color: "#cbd5e1", marginBottom: 6 }}>
+                Billing Deductions: ₹{Number(result.claim_summary.billing_deductions || 0).toLocaleString("en-IN")}
+                </div>
+                </div>
+
+                {result.claim_summary.billing_breakdown &&
+                Object.keys(result.claim_summary.billing_breakdown).length > 0 ? (
+                <div style={{ display: "grid", gap: 12 }}>
+                {Object.entries(result.claim_summary.billing_breakdown).map(([category, details]) => (
+                <div
+                key={category}
+                style={{
+                padding: 14,
+                borderRadius: 10,
+                background: "rgba(30,41,59,0.55)",
+                border: "1px solid rgba(148,163,184,0.15)"
+                }}
+                >
+                <div style={{ color: "#e2e8f0", fontWeight: 700, marginBottom: 8 }}>
+                {category.replaceAll("_", " ").toUpperCase()}
+                </div>
+                <div style={{ color: "#94a3b8", fontSize: 13 }}>
+                Claimed: ₹{Number(details.claimed || 0).toLocaleString("en-IN")}
+                </div>
+                <div style={{ color: "#94a3b8", fontSize: 13 }}>
+                Approved: ₹{Number(details.approved || 0).toLocaleString("en-IN")}
+                </div>
+                <div style={{
+                color:
+                details.status === "partial"
+                ? "#f59e0b"
+                : details.status === "rejected"
+                ? "#ef4444"
+                : "#10b981",
+                fontSize: 13,
+                marginTop: 4
+                }}>
+                Status: {details.status || "unknown"}
+                </div>
+                {details.reason && (
+                <div style={{ color: "#64748b", fontSize: 12, marginTop: 6 }}>
+                {details.reason}
+                </div>
+                )}
+                </div>
+                ))}
+                </div>
+                ) : (
+                <div style={{ color: "#94a3b8", fontSize: 13 }}>
+                No billing breakdown available.
+                </div>
+                )}
+                </div>
+                )}
+
+
+                {/* */}
                 {Object.entries(result.claim_summary || {})
-                  .filter(([key]) => !['status', 'missing_fields', 'action_required', 'claim_id'].includes(key))
+                   // added billing relevant emelents to be rendered
+                  .filter(([key]) => !['status', 'missing_fields', 'action_required', 'claim_id','billing_anomaly_score','billing_deductions','billing_breakdown'].includes(key))
                   .map(([key, value]) => {
                     // Skip null/undefined values
                     if (value === null || value === undefined) return null;

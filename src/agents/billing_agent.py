@@ -6,7 +6,6 @@ from typing import Dict, Any, List, Tuple
 
 logger = logging.getLogger("insurance_claim_ai.agents")
 
-
 class BillingAgent:
     AGENT_NAME = "Billing & Processing Agent"
     OWNER = "SSpandana"
@@ -27,11 +26,6 @@ class BillingAgent:
         except ValueError:
             return 0.0
 
-    def _extract_stay_days(self, extracted_requirements: Dict[str, Any]) -> int:
-        # simple fallback for now
-        # later you can parse admission/discharge dates properly
-        return 1
-
     def _collect_inputs(self, claim_data: Dict[str, Any]) -> Dict[str, Any]:
         requirements_output = claim_data.get("requirements", {}).get("output", {})
         extracted_requirements = requirements_output.get("extracted_requirements", {}) or {}
@@ -42,54 +36,166 @@ class BillingAgent:
         combined_text = f"{image_text}\n{pdf_text}".strip()
 
         return {
-            "extracted_requirements": extracted_requirements,
-            "image_text": image_text,
-            "pdf_text": pdf_text,
-            "combined_text": combined_text,
+        "extracted_requirements": extracted_requirements,
+        "image_text": image_text,
+        "pdf_text": pdf_text,
+        "combined_text": combined_text,
         }
+
+    def _get_category_keywords(self) -> Dict[str, List[str]]:
+        return {
+        "room_charges": [
+        "room rent", "room charges", "bed charges", "icu rent",
+        "nursing", "routine service", "ward charges", "twin sharing"
+        ],
+        "procedure_charges": [
+        "procedure", "surgery", "operation", "operation theatre",
+        "ot charges", "surgical", "appendectomy", "angioplasty", "stent"
+        ],
+        "medication": [
+        "medicine", "medicines", "drug", "pharmacy",
+        "tablet", "capsule", "injection", "antibiotic"
+        ],
+        "investigations": [
+        "lab", "laboratory", "test", "scan", "xray", "x-ray",
+        "mri", "ct", "ecg", "echo", "ultrasound", "investigation"
+        ],
+        "consumables": [
+        "consumable", "gloves", "syringe", "catheter", "dressing", "sutures"
+        ],
+        "doctor_fees": [
+        "doctor fee", "consultation", "surgeon fee", "assistant surgeon",
+        "anesthetist", "doctor visit", "consultant", "professional fee",
+        "visit charges"
+        ],
+        "non_payable": [
+        "registration", "file", "welcome kit", "kit charge","convenience kit",
+        "attender", "meal","food","service charge", "admission charge"
+        ],
+        }
+
+    def _match_category(self, text: str) -> str:
+        lower = text.lower()
+        if any(x in lower for x in [
+            "registration",
+            "file",
+            "kit",
+            "convenience",
+            "attender",
+            "meal",
+            "food",
+            "service charge"
+        ]):
+            return "non-payable"
+            
+        category_keywords = self._get_category_keywords()
+
+        for category, keywords in category_keywords.items():
+            if category =="non_payable":
+                continue
+            if any(keyword in lower for keyword in keywords):
+                return category
+        return "miscellaneous"
 
     def _extract_line_items(self, text: str) -> List[Tuple[str, float, str]]:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        line_items = []
+        line_items: List[Tuple[str, float, str]] = []
 
-        category_keywords = {
-            "room_charges": ["room rent", "room charges", "bed charges", "icu rent"],
-            "procedure_charges": ["procedure", "surgery", "operation", "angioplasty", "stent"],
-            "medication": ["medicine", "medicines", "drug", "pharmacy", "tablet", "injection"],
-            "investigations": ["lab", "test", "scan", "xray", "x-ray", "mri", "ct", "ecg", "echo"],
-            "consumables": ["consumable", "gloves", "syringe", "kit", "catheter"],
-            "doctor_fees": ["doctor fee", "consultation", "surgeon fee", "visiting fee"],
-        }
+        skip_keywords = [
+        "grand total",
+        "total amount",
+        "claim amount submitted",
+        "net payable",
+        "subtotal",
+        "bill total",
+        ]
 
-        for line in lines:
+        seen_entries = set()
+
+        print("[BILLING][DEBUG] raw line count:", len(lines))
+        for idx, line in enumerate(lines[:50], 1):
+            print(f"[BILLING][DEBUG] line {idx}: {line}")
+
+        for i, line in enumerate(lines):
             lower = line.lower()
-            amount_matches = re.findall(r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)", lower)
-            if not amount_matches:
+
+            if any(keyword in lower for keyword in skip_keywords):
+                print("[BILLING][SKIP] summary line skipped:", line)
                 continue
 
-            amount = self._parse_amount(amount_matches[-1])
-            matched_category = "miscellaneous"
+            # Try current line alone, then merge with next lines to handle multiline PDF extraction
+            candidates = [line]
 
-            for category, keywords in category_keywords.items():
-                if any(keyword in lower for keyword in keywords):
-                    matched_category = category
-                    break
+            if i + 1 < len(lines):
+                candidates.append(f"{line} {lines[i + 1]}")
 
-            line_items.append((matched_category, amount, line))
+            if i + 2 < len(lines):
+                candidates.append(f"{line} {lines[i + 1]} {lines[i + 2]}")
+
+            matched = False
+
+            for candidate in candidates:
+                candidate_lower = candidate.lower()
+
+                if any(keyword in candidate_lower for keyword in skip_keywords):
+                    continue
+
+                category = self._match_category(candidate)
+                if category == "miscellaneous":
+                    continue
+
+                amount_matches = re.findall(r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)", candidate_lower)
+                if not amount_matches:
+                    continue
+
+                # take the largest amount in the candidate since multiline rows may contain qty + unit rate + total
+                parsed_amounts = [self._parse_amount(x) for x in amount_matches]
+                parsed_amounts = [x for x in parsed_amounts if x > 0]
+
+                if not parsed_amounts:
+                    continue
+
+                amount = max(parsed_amounts)
+
+                if amount < 10:
+                    print("[BILLING][SKIP] tiny amount skipped:", candidate)
+                    continue
+
+                dedupe_key = (category, amount, re.sub(r"\s+", " ", candidate_lower).strip())
+                if dedupe_key in seen_entries:
+                    continue
+                seen_entries.add(dedupe_key)
+                print(f"[BILLING][CATEGORY matched]: {category} | amount: {amount} |text: {candidate}" )
+                line_items.append((category, amount, candidate))
+                matched = True
+                break
+
+        # Fallback: if single line has amount but no category, keep it as miscellaneous
+            if not matched:
+                amount_matches = re.findall(r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)", lower)
+                if amount_matches:
+                    parsed_amounts = [self._parse_amount(x) for x in amount_matches]
+                    parsed_amounts = [x for x in parsed_amounts if x >= 10]
+                    if parsed_amounts:
+                        amount = max(parsed_amounts)
+                        dedupe_key = ("miscellaneous", amount, re.sub(r"\s+", " ", lower).strip())
+                        if dedupe_key not in seen_entries:
+                            seen_entries.add(dedupe_key)
+                            line_items.append(("miscellaneous", amount, line))
 
         return line_items
 
     def _build_breakdown(self, line_items: List[Tuple[str, float, str]], context: Dict[str, Any]) -> Dict[str, Any]:
-        breakdown = {}
+        breakdown: Dict[str, Any] = {}
 
         for category, amount, raw_line in line_items:
             if category not in breakdown:
                 breakdown[category] = {
-                    "claimed": 0.0,
-                    "approved": 0.0,
-                    "status": "approved",
-                    "reason": "Within expected range",
-                    "lines": []
+                "claimed": 0.0,
+                "approved": 0.0,
+                "status": "approved",
+                "reason": "Within expected range",
+                "lines": []
                 }
 
             breakdown[category]["claimed"] += amount
@@ -98,22 +204,34 @@ class BillingAgent:
 
         total_claim_amount = self._parse_amount(context.get("total_claim_amount"))
 
-        # simple rule caps
         for category, entry in breakdown.items():
             claimed = entry["claimed"]
 
-            if category == "room_charges" and claimed > 50000:
+            if category == "non_payable":
+                entry["approved"] = 0.0
+                entry["status"] = "rejected"
+                entry["reason"] = "Non-medical or non-payable charge"
+
+            elif category == "room_charges" and claimed > 50000:
                 entry["approved"] = min(claimed, 50000)
                 entry["status"] = "partial"
                 entry["reason"] = "Room charges exceed default cap"
+
             elif category == "doctor_fees" and total_claim_amount and claimed > (0.15 * total_claim_amount):
                 entry["approved"] = 0.15 * total_claim_amount
                 entry["status"] = "partial"
                 entry["reason"] = "Doctor fees exceed 15% threshold"
+
             elif category == "consumables" and total_claim_amount and claimed > (0.20 * total_claim_amount):
                 entry["approved"] = 0.20 * total_claim_amount
                 entry["status"] = "partial"
                 entry["reason"] = "Consumables exceed 20% threshold"
+            elif category == "miscellaneous" and claimed < 20000:
+                entry["approved"] = 0.0
+                entry["status"] = "rejected"
+                entry["reason"] = "Small miscellaneous charge treated as non-payable"
+
+            entry["approved"] = min(entry["approved"], entry["claimed"])
 
         return breakdown
 
@@ -125,11 +243,14 @@ class BillingAgent:
 
         if declared_total > 0:
             mismatch_ratio = abs(total_claimed - declared_total) / max(declared_total, 1)
-            if mismatch_ratio > 0.10:
-                score += 0.25
+            if mismatch_ratio > 0.20:
+                score += 0.15
 
         partial_count = sum(1 for item in breakdown.values() if item["status"] == "partial")
         score += min(partial_count * 0.10, 0.30)
+
+        rejected_count = sum(1 for item in breakdown.values() if item["status"] == "rejected")
+        score += min(rejected_count * 0.08, 0.20)
 
         if total_claimed > 0 and (total_claimed - total_approved) / total_claimed > 0.25:
             score += 0.20
@@ -153,7 +274,9 @@ class BillingAgent:
         print("[BILLING][INPUT] pdf_text_length:", len(inputs["pdf_text"]))
         print("[BILLING][INPUT] combined_text_length:", len(combined_text))
         print("[BILLING][INPUT] combined_text_preview:")
-        print(combined_text[:800])
+        print(combined_text[:1200])
+        print("[BILLING][DEBUG] combined_text repr:")
+        print(repr(combined_text[:1200]))
 
         line_items = self._extract_line_items(combined_text)
         print("[BILLING][PARSE] extracted_line_items_count:", len(line_items))
@@ -161,43 +284,58 @@ class BillingAgent:
             print("[BILLING][PARSE] item:", item)
 
         context = {
-            "total_claim_amount": extracted_requirements.get("total_claim_amount"),
-            "diagnosis": extracted_requirements.get("diagnosis"),
-            "hospital_name": extracted_requirements.get("hospital_name"),
-            "admission_date": extracted_requirements.get("admission_date"),
-            "discharge_date": extracted_requirements.get("discharge_date"),
+        "total_claim_amount": extracted_requirements.get("total_claim_amount"),
+        "diagnosis": extracted_requirements.get("diagnosis"),
+        "hospital_name": extracted_requirements.get("hospital_name"),
+        "admission_date": extracted_requirements.get("admission_date"),
+        "discharge_date": extracted_requirements.get("discharge_date"),
         }
 
         breakdown = self._build_breakdown(line_items, context)
+
         declared_total = self._parse_amount(extracted_requirements.get("total_claim_amount"))
+        print("[BILLING][DEBUG] declared_total parsed:", declared_total)
         parsed_total = sum(item["claimed"] for item in breakdown.values())
-        approved_total = sum(item["approved"] for item in breakdown.values())
-        effective_claimed_total= declared_total if declared_total > 0 else parsed_total
-        approved_total= min(approved_total, effective_claimed_total)
-        if parsed_total >0 and approved_total > parsed_total:
-            approved_total = parsed_total
-        deductions = max(effective_claimed_total - approved_total,0.0)
+        approved_total_before_clamp = sum(item["approved"] for item in breakdown.values())
+
+        effective_claimed_total = declared_total if declared_total > 0 else parsed_total
+        approved_total = min(approved_total_before_clamp, effective_claimed_total)
+
+        if parsed_total > 0:
+            approved_total = min(approved_total, parsed_total)
+
+        deductions = max(effective_claimed_total - approved_total, 0.0)
         anomaly_score = self._score_anomalies(breakdown, declared_total)
 
+        print("[BILLING][TOTALS] declared_total:", declared_total)
+        print("[BILLING][TOTALS] parsed_total:", parsed_total)
+        print("[BILLING][TOTALS] approved_total_before_clamp:", approved_total_before_clamp)
+        print("[BILLING][TOTALS] effective_claimed_total:", effective_claimed_total)
+        print("[BILLING][TOTALS] approved_total_after_clamp:", approved_total)
+        print("[BILLING][TOTALS] deductions:", deductions)
+
         reasoning = [
-            "Collected upstream document text from image/PDF agents",
-            "Extracted billing line items using keyword and amount parsing",
-            "Grouped charges into billing categories",
-            "Applied rule-based approval thresholds by category",
-            f"Parsed total claimed: {parsed_total:.2f}",
-            f"Approved total: {approved_total:.2f}",
-            f"Anomaly score computed as {anomaly_score:.2f}",
+        "Collected upstream document text from image/PDF agents",
+        "Extracted billing line items using multiline-aware parsing",
+        "Grouped charges into billing categories",
+        "Applied rule-based approval thresholds by category",
+        f"Parsed total claimed: {parsed_total:.2f}",
+        f"Approved total: {approved_total:.2f}",
+        f"Anomaly score computed as {anomaly_score:.2f}",
         ]
-
+        if deductions>0:
+            reasoning.append(f"Detected non-payable charges totaling ₹{deductions:.2f}")
+        if anomaly_score>0:
+            reasoning.append(f"Billing anomaly score assessed at ₹{anomaly_score:.2f}")
         output = {
-            "total_claimed": effective_claimed_total,
-            "total_approved": approved_total ,
-            "breakdown": breakdown,
-            "anomaly_score": anomaly_score,
-            "pricing_benchmark": "Rule-based benchmark v1",
-            "deductions": deductions,
+        "total_claimed": effective_claimed_total,
+        "total_approved": approved_total,
+        "breakdown": breakdown,
+        "anomaly_score": anomaly_score,
+        "pricing_benchmark": "Rule-based benchmark v3",
+        "deductions": deductions,
         }
-
+        print("[BILLING][OUTPUT] breakdown categories:", list(breakdown.keys()))
         print("[BILLING][OUTPUT] breakdown:", breakdown)
         print("[BILLING][OUTPUT] total_claimed:", output["total_claimed"])
         print("[BILLING][OUTPUT] total_approved:", output["total_approved"])
@@ -210,11 +348,11 @@ class BillingAgent:
 
         elapsed = time.time() - start
         return {
-            "agent": self.AGENT_NAME,
-            "owner": self.OWNER,
-            "status": "success",
-            "reasoning": reasoning,
-            "output": output,
-            "confidence": max(0.55, 1.0 - anomaly_score / 2),
-            "processing_time": f"{elapsed:.1f}s",
+        "agent": self.AGENT_NAME,
+        "owner": self.OWNER,
+        "status": "success",
+        "reasoning": reasoning,
+        "output": output,
+        "confidence": max(0.55, 1.0 - anomaly_score / 2),
+        "processing_time": f"{elapsed:.1f}s",
         }
