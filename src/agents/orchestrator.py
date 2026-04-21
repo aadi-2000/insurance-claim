@@ -96,7 +96,7 @@ class OrchestratorAgent:
 
     AGENT_NAME = "Master Orchestrator"
     OWNER = "Aadithya Pabbisetty"
-
+    
     # Default agent weights for decision fusion
     DEFAULT_WEIGHTS = [
         AgentWeight("image", 0.15),
@@ -108,7 +108,7 @@ class OrchestratorAgent:
     ]
 
     def __init__(self, llm_client=None, weights: Optional[List[AgentWeight]] = None,
-                 thresholds: Optional[DecisionThresholds] = None):
+                 thresholds: Optional[DecisionThresholds] = None, claim_history_db=None):
         """
         Initialize the Orchestrator.
 
@@ -116,10 +116,12 @@ class OrchestratorAgent:
             llm_client: LLM client for generating natural language summaries
             weights: Custom agent weights (uses defaults if None)
             thresholds: Custom decision thresholds (uses defaults if None)
+            claim_history_db: ClaimHistoryDatabase instance for storing processed claims
         """
         self.llm_client = llm_client
         self.weights = {w.agent_key: w for w in (weights or self.DEFAULT_WEIGHTS)}
         self.thresholds = thresholds or DecisionThresholds()
+        self.claim_history_db = claim_history_db
         self.reasoning_trace: List[ReasoningStep] = []
         logger.info(f"[{self.AGENT_NAME}] Initialized with {len(self.weights)} agent weights")
 
@@ -330,6 +332,209 @@ class OrchestratorAgent:
         all_extracted_data["output_file"] = str(output_file)
         return all_extracted_data
 
+    async def run_pipeline_with_results(
+        self,
+        agents: Dict[str, Any],
+        image_result: Dict[str, Any],
+        pdf_result: Dict[str, Any],
+        on_log=None,
+    ) -> "OrchestratorResult":
+        """
+        Run orchestrator pipeline with pre-processed image and PDF results.
+        Used when multiple files are uploaded and need to be combined.
+        
+        Args:
+            agents: Dict of agent_key -> agent_instance
+            image_result: Pre-processed image agent result
+            pdf_result: Pre-processed PDF agent result
+            on_log: Optional callback for real-time log streaming
+            
+        Returns:
+            OrchestratorResult with complete assessment
+        """
+        self.reasoning_trace = []
+        start_time = time.time()
+        results = {}
+        log_messages = []
+
+        def log(msg):
+            log_messages.append(msg)
+            if on_log:
+                on_log(msg)
+
+        log(self._log_step("INIT", "Orchestrator Agent initialized - coordinating all agent outputs"))
+
+        # Use pre-processed results or mark as skipped
+        if image_result and image_result.get("output"):
+            results["image"] = image_result
+            log(self._log_step("RESULT", f"Image agent results loaded: conf={image_result.get('confidence', 0)}", "image"))
+        else:
+            results["image"] = {"status": "skipped", "reason": "No image files uploaded"}
+            log(self._log_step("SKIP", "Image agent skipped - no image files", "image"))
+        
+        if pdf_result and pdf_result.get("output"):
+            results["pdf"] = pdf_result
+            log(self._log_step("RESULT", f"PDF agent results loaded: conf={pdf_result.get('confidence', 0)}", "pdf"))
+        else:
+            results["pdf"] = {"status": "skipped", "reason": "No PDF files uploaded"}
+            log(self._log_step("SKIP", "PDF agent skipped - no PDF files", "pdf"))
+
+        # Continue with Requirements Agent and rest of pipeline
+        return await self._continue_pipeline(agents, results, log_messages, start_time, log)
+
+    async def _continue_pipeline(self, agents, results, log_messages, start_time, log):
+        """Continue pipeline from Requirements Agent onwards"""
+        # ---- Step 3: Requirements Validation ----
+        log(self._log_step("PIPELINE", "Starting Requirements Agent", "requirements"))
+        try:
+            results["requirements"] = await agents["requirements"].process(
+                results.get("image", {}), results.get("pdf", {})
+            )
+            log(self._log_step("RESULT", f"Requirements agent completed: conf={results['requirements']['confidence']}", "requirements"))
+            
+            # Check if requirements are met
+            requirements_met = results["requirements"].get("output", {}).get("requirements_met", False)
+            missing_fields = results["requirements"].get("output", {}).get("missing_fields", [])
+            
+            if not requirements_met and missing_fields:
+                log(self._log_step("HOLD", f"Missing required documents/fields: {', '.join(missing_fields)}", "requirements"))
+                print("\n" + "="*80)
+                print("⚠️  CLAIM PROCESSING HALTED - MISSING REQUIRED INFORMATION")
+                print("="*80)
+                print(f"\nThe following required fields are missing:")
+                for field in missing_fields:
+                    print(f"  ❌ {field}")
+                print(f"\n📋 ACTION REQUIRED:")
+                print(f"   Please provide documents containing the following information:")
+                for field in missing_fields:
+                    print(f"   - {field.replace('_', ' ').title()}")
+                print("\n" + "="*80 + "\n")
+                
+                # Return early with request for missing documents
+                elapsed = time.time() - start_time
+                extracted_reqs = results["requirements"].get("output", {}).get("extracted_requirements", {})
+                
+                # Generate unique claim ID for session tracking
+                claim_id = f"claim_{int(time.time() * 1000)}"
+                
+                return OrchestratorResult(
+                    status="pending_documents",
+                    decision="HOLD",
+                    decision_reasons=[
+                        f"Missing {len(missing_fields)} required field(s)",
+                        "User action required: Please provide missing documents"
+                    ],
+                    weighted_confidence=0.0,
+                    agent_summaries=[{
+                        "agent": "Requirements Agent",
+                        "status": "INCOMPLETE",
+                        "missing_fields": missing_fields
+                    }],
+                    claim_summary={
+                        "claim_id": claim_id,
+                        "status": "PENDING_DOCUMENTS",
+                        "missing_fields": missing_fields,
+                        "action_required": "Please upload documents containing the missing information",
+                        "patient_name": extracted_reqs.get("patient_name"),
+                        "policy_number": extracted_reqs.get("policy_number"),
+                        "hospital_name": extracted_reqs.get("hospital_name"),
+                        "diagnosis": extracted_reqs.get("diagnosis"),
+                        "admission_date": extracted_reqs.get("admission_date"),
+                        "discharge_date": extracted_reqs.get("discharge_date"),
+                        "total_claim_amount": extracted_reqs.get("total_claim_amount"),
+                    },
+                    processing_summary={
+                        "total_agents": 3,
+                        "agents_passed": 2,
+                        "orchestrator_time": f"{elapsed:.1f}s",
+                        "halt_reason": "Missing required documents"
+                    },
+                    reasoning_trace=log_messages,
+                )
+                
+        except Exception as e:
+            log(self._log_step("ERROR", f"Requirements agent failed: {e}", "requirements"))
+            results["requirements"] = self._create_error_result("Requirements Agent", "Karthikeyan Pillai", str(e))
+
+        # ---- Step 4: Credibility & Policy ----
+        log(self._log_step("PIPELINE", "Starting Credibility Agent", "credibility"))
+        try:
+            results["credibility"] = await agents["credibility"].process(results)
+            log(self._log_step("RESULT", f"Credibility agent completed: conf={results['credibility']['confidence']}", "credibility"))
+            
+            # Check credibility score - if too low, stop immediately
+            credibility_score = results["credibility"].get("output", {}).get("credibility_score", 1.0)
+            
+            if credibility_score < self.thresholds.credibility_reject:
+                log(self._log_step("REJECT", f"Low credibility score: {credibility_score:.2f} < {self.thresholds.credibility_reject}", "credibility"))
+                elapsed = time.time() - start_time
+                return OrchestratorResult(
+                    status="rejected",
+                    decision="REJECT",
+                    decision_reasons=[
+                        f"Low credibility score: {credibility_score:.2f}",
+                        f"Score below minimum threshold of {self.thresholds.credibility_reject}"
+                    ],
+                    weighted_confidence=credibility_score,
+                    agent_summaries=[{"agent": "Credibility Agent", "status": "FAILED", "score": credibility_score}],
+                    claim_summary={"status": "REJECTED", "credibility_score": credibility_score},
+                    processing_summary={"total_agents": 4, "agents_passed": 3, "orchestrator_time": f"{elapsed:.1f}s"},
+                    reasoning_trace=log_messages,
+                )
+                
+        except Exception as e:
+            log(self._log_step("ERROR", f"Credibility agent failed: {e}", "credibility"))
+            results["credibility"] = self._create_error_result("Credibility Agent", "Shruti Roy", str(e))
+
+        # ---- Step 5: Billing ----
+        log(self._log_step("PIPELINE", "Starting Billing Agent", "billing"))
+        try:
+            results["billing"] = await agents["billing"].process(results)
+            log(self._log_step("RESULT", f"Billing agent completed: conf={results['billing']['confidence']}", "billing"))
+        except Exception as e:
+            log(self._log_step("ERROR", f"Billing agent failed: {e}", "billing"))
+            results["billing"] = self._create_error_result("Billing Agent", "Siri Spandana", str(e))
+
+        # ---- Step 6: Fraud Detection ----
+        log(self._log_step("PIPELINE", "Starting Fraud Detection Agent", "fraud"))
+        try:
+            results["fraud"] = await agents["fraud"].process(results)
+            log(self._log_step("RESULT", f"Fraud agent completed: conf={results['fraud']['confidence']}", "fraud"))
+        except Exception as e:
+            log(self._log_step("ERROR", f"Fraud agent failed: {e}", "fraud"))
+            results["fraud"] = self._create_error_result("Fraud Detection Agent", "Titash Bhattacharya", str(e))
+
+        # ---- Step 7: Decision Fusion ----
+        log(self._log_step("FUSION", "Applying weighted decision fusion logic"))
+        decision_result = self._compute_decision(results)
+        log(self._log_step("DECISION", f"Final decision: {decision_result['decision']}"))
+
+        # ---- Step 8: LLM Summary ----
+        ai_summary = ""
+        if self.llm_client:
+            try:
+                ai_summary = await self._generate_summary(decision_result)
+            except:
+                pass
+
+        # ---- Build Final Result ----
+        elapsed = time.time() - start_time
+        return OrchestratorResult(
+            status="success",
+            decision=decision_result["decision"],
+            decision_reasons=decision_result["reasons"],
+            weighted_confidence=decision_result["weighted_confidence"],
+            agent_summaries=decision_result["agent_summaries"],
+            claim_summary=self._build_claim_summary(results),
+            processing_summary={
+                "total_agents": len(results),
+                "agents_passed": sum(1 for r in results.values() if r.get("status") == "success"),
+                "orchestrator_time": f"{elapsed:.1f}s",
+                "ai_summary": ai_summary,
+            },
+            reasoning_trace=log_messages,
+        )
+
     async def run_pipeline(self, agents: Dict[str, Any], file_bytes: bytes,
                             filename: str, mime_type: str = "image/jpeg",
                             on_log: Optional[Callable] = None) -> OrchestratorResult:
@@ -430,6 +635,9 @@ class OrchestratorAgent:
                 
                 # Return early with request for missing documents
                 elapsed = time.time() - start_time
+                # Get extracted requirements to show what was found
+                extracted_reqs = results["requirements"].get("output", {}).get("extracted_requirements", {})
+                
                 return OrchestratorResult(
                     status="pending_documents",
                     decision="HOLD",
@@ -446,7 +654,14 @@ class OrchestratorAgent:
                     claim_summary={
                         "status": "PENDING_DOCUMENTS",
                         "missing_fields": missing_fields,
-                        "action_required": "Please upload documents containing the missing information"
+                        "action_required": "Please upload documents containing the missing information",
+                        "patient_name": extracted_reqs.get("patient_name"),
+                        "policy_number": extracted_reqs.get("policy_number"),
+                        "hospital_name": extracted_reqs.get("hospital_name"),
+                        "diagnosis": extracted_reqs.get("diagnosis"),
+                        "admission_date": extracted_reqs.get("admission_date"),
+                        "discharge_date": extracted_reqs.get("discharge_date"),
+                        "total_claim_amount": extracted_reqs.get("total_claim_amount"),
                     },
                     processing_summary={
                         "total_agents": 3,
@@ -461,76 +676,91 @@ class OrchestratorAgent:
             log(self._log_step("ERROR", f"Requirements agent failed: {e}", "requirements"))
             results["requirements"] = self._create_error_result("Requirements Agent", "Karthikeyan Pillai", str(e))
 
-        # ---- Step 4: Credibility & Policy ----
-        log(self._log_step("PIPELINE", "Starting Credibility Agent", "credibility"))
-        try:
-            results["credibility"] = await agents["credibility"].process(results)
-            log(self._log_step("RESULT", f"Credibility agent completed: conf={results['credibility']['confidence']}", "credibility"))
+        # ---- Step 4-6: Run Credibility, Billing, and Fraud agents in PARALLEL ----
+        log(self._log_step("PIPELINE", "Starting Credibility, Billing, and Fraud agents in parallel", "parallel"))
+        
+        async def run_credibility():
+            try:
+                result = await agents["credibility"].process(results)
+                log(self._log_step("RESULT", f"Credibility agent completed: conf={result['confidence']}", "credibility"))
+                return result
+            except Exception as e:
+                log(self._log_step("ERROR", f"Credibility agent failed: {e}", "credibility"))
+                return self._create_error_result("Credibility Agent", "Shruti Roy", str(e))
+        
+        async def run_billing():
+            try:
+                result = await agents["billing"].process(results)
+                log(self._log_step("RESULT", f"Billing agent completed: conf={result['confidence']}", "billing"))
+                return result
+            except Exception as e:
+                log(self._log_step("ERROR", f"Billing agent failed: {e}", "billing"))
+                return self._create_error_result("Billing Agent", "Siri Spandana", str(e))
+        
+        async def run_fraud():
+            try:
+                result = await agents["fraud"].process(results)
+                log(self._log_step("RESULT", f"Fraud agent completed: conf={result['confidence']}", "fraud"))
+                return result
+            except Exception as e:
+                log(self._log_step("ERROR", f"Fraud agent failed: {e}", "fraud"))
+                return self._create_error_result("Fraud Detection Agent", "Titash Bhattacharya", str(e))
+        
+        # Execute all three agents in parallel
+        credibility_result, billing_result, fraud_result = await asyncio.gather(
+            run_credibility(),
+            run_billing(),
+            run_fraud()
+        )
+        
+        results["credibility"] = credibility_result
+        results["billing"] = billing_result
+        results["fraud"] = fraud_result
+        
+        log(self._log_step("PIPELINE", "All parallel agents completed", "parallel"))
+        
+        # Check credibility score - if too low, stop immediately
+        credibility_score = results["credibility"].get("output", {}).get("credibility_score", 1.0)
+        
+        if credibility_score < self.thresholds.credibility_reject:
+            log(self._log_step("REJECT", f"Low credibility score: {credibility_score:.2f} < {self.thresholds.credibility_reject}", "credibility"))
+            print("\n" + "="*80)
+            print("🛑 CLAIM PROCESSING STOPPED - LOW CREDIBILITY")
+            print("="*80)
+            print(f"\nCredibility Score: {credibility_score:.2f} (Minimum required: {self.thresholds.credibility_reject})")
+            print(f"\n❌ DECISION: CLAIM REJECTED")
+            print(f"\nReason: User credibility score is below acceptable threshold.")
+            print("="*80 + "\n")
             
-            # Check credibility score - if too low, stop immediately
-            credibility_score = results["credibility"].get("output", {}).get("credibility_score", 1.0)
-            
-            if credibility_score < self.thresholds.credibility_reject:
-                log(self._log_step("REJECT", f"Low credibility score: {credibility_score:.2f} < {self.thresholds.credibility_reject}", "credibility"))
-                print("\n" + "="*80)
-                print("🛑 CLAIM PROCESSING STOPPED - LOW CREDIBILITY")
-                print("="*80)
-                print(f"\nCredibility Score: {credibility_score:.2f} (Minimum required: {self.thresholds.credibility_reject})")
-                print(f"\n❌ DECISION: CLAIM REJECTED")
-                print(f"\nReason: User credibility score is below acceptable threshold.")
-                print("="*80 + "\n")
-                
-                # Stop orchestrator immediately
-                elapsed = time.time() - start_time
-                return OrchestratorResult(
-                    status="rejected",
-                    decision="REJECT",
-                    decision_reasons=[
-                        f"Low credibility score: {credibility_score:.2f}",
-                        f"Score below minimum threshold of {self.thresholds.credibility_reject}"
-                    ],
-                    weighted_confidence=credibility_score,
-                    agent_summaries=[
-                        {"agent": "Image Processing Agent", "status": "COMPLETED"},
-                        {"agent": "PDF Processing Agent", "status": "COMPLETED"},
-                        {"agent": "Requirements Agent", "status": "COMPLETED"},
-                        {"agent": "Credibility Agent", "status": "FAILED", "score": credibility_score}
-                    ],
-                    claim_summary={
-                        "status": "REJECTED",
-                        "credibility_score": credibility_score,
-                        "rejection_reason": "Low user credibility"
-                    },
-                    processing_summary={
-                        "total_agents": 4,
-                        "agents_passed": 3,
-                        "orchestrator_time": f"{elapsed:.1f}s",
-                        "halt_reason": "Credibility check failed"
-                    },
-                    reasoning_trace=log_messages,
-                )
-                
-        except Exception as e:
-            log(self._log_step("ERROR", f"Credibility agent failed: {e}", "credibility"))
-            results["credibility"] = self._create_error_result("Credibility Agent", "Shruti Roy", str(e))
-
-        # ---- Step 5: Billing ----
-        log(self._log_step("PIPELINE", "Starting Billing Agent", "billing"))
-        try:
-            results["billing"] = await agents["billing"].process(results)
-            log(self._log_step("RESULT", f"Billing agent completed: conf={results['billing']['confidence']}", "billing"))
-        except Exception as e:
-            log(self._log_step("ERROR", f"Billing agent failed: {e}", "billing"))
-            results["billing"] = self._create_error_result("Billing Agent", "Siri Spandana", str(e))
-
-        # ---- Step 6: Fraud Detection ----
-        log(self._log_step("PIPELINE", "Starting Fraud Detection Agent", "fraud"))
-        try:
-            results["fraud"] = await agents["fraud"].process(results)
-            log(self._log_step("RESULT", f"Fraud agent completed: conf={results['fraud']['confidence']}", "fraud"))
-        except Exception as e:
-            log(self._log_step("ERROR", f"Fraud agent failed: {e}", "fraud"))
-            results["fraud"] = self._create_error_result("Fraud Detection Agent", "Titash Bhattacharya", str(e))
+            # Stop orchestrator immediately
+            elapsed = time.time() - start_time
+            return OrchestratorResult(
+                status="rejected",
+                decision="REJECT",
+                decision_reasons=[
+                    f"Low credibility score: {credibility_score:.2f}",
+                    f"Score below minimum threshold of {self.thresholds.credibility_reject}"
+                ],
+                weighted_confidence=credibility_score,
+                agent_summaries=[
+                    {"agent": "Image Processing Agent", "status": "COMPLETED"},
+                    {"agent": "PDF Processing Agent", "status": "COMPLETED"},
+                    {"agent": "Requirements Agent", "status": "COMPLETED"},
+                    {"agent": "Credibility Agent", "status": "FAILED", "score": credibility_score}
+                ],
+                claim_summary={
+                    "status": "REJECTED",
+                    "credibility_score": credibility_score,
+                    "rejection_reason": "Low user credibility"
+                },
+                processing_summary={
+                    "total_agents": 4,
+                    "agents_passed": 3,
+                    "orchestrator_time": f"{elapsed:.1f}s",
+                    "halt_reason": "Credibility check failed"
+                },
+                reasoning_trace=log_messages,
+            )
 
         # ---- Step 7: Decision Fusion ----
         log(self._log_step("FUSION", "Applying weighted decision fusion logic"))
@@ -555,14 +785,32 @@ class OrchestratorAgent:
             float(r.get("processing_time", "0s").rstrip("s"))
             for r in results.values()
         )
+        
+        claim_summary = self._build_claim_summary(results)
+        final_decision = decision_result["decision"]
+        
+        # Store processed claim in history database (only for final decisions, not HOLD)
+        if self.claim_history_db and final_decision != "HOLD":
+            try:
+                claim_data = results.get("requirements", {}).get("output", {}).get("extracted_requirements", {})
+                if claim_data:
+                    claim_id = self.claim_history_db.add_claim(
+                        claim_data=claim_data,
+                        decision=final_decision,
+                        decision_reasons=decision_result["reasons"]
+                    )
+                    log(self._log_step("STORAGE", f"Claim stored in history database: {claim_id}"))
+                    logger.info(f"✅ Stored claim in history database: {claim_id}")
+            except Exception as e:
+                logger.error(f"Failed to store claim in history database: {e}")
 
         return OrchestratorResult(
             status="success",
-            decision=decision_result["decision"],
+            decision=final_decision,
             decision_reasons=decision_result["reasons"],
             weighted_confidence=decision_result["weighted_confidence"],
             agent_summaries=decision_result["agent_summaries"],
-            claim_summary=self._build_claim_summary(results),
+            claim_summary=claim_summary,
             processing_summary={
                 "total_agents": len(results),
                 "agents_passed": sum(1 for r in results.values() if r.get("status") == "success"),
@@ -736,6 +984,8 @@ class OrchestratorAgent:
             "amount_claimed": amount_claimed,
             "amount_approved": amount_approved,
             "fraud_score": self._safe_get(results, "fraud", "output", "overall_fraud_score", default=0),
+            "fraud_category": self._safe_get(results, "fraud", "output", "fraud_category", default="NONE"),
+            "fraud_type_details": self._safe_get(results, "fraud", "output", "fraud_type_details", default=[]),
             "credibility_score": self._safe_get(results, "credibility", "output", "credibility_score", default=0),
             "documents_complete": self._safe_get(results, "requirements", "output", "requirements_met", default=False),
             #added billing

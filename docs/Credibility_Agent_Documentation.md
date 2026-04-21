@@ -782,9 +782,9 @@ Note: Even though the credibility score is MODERATE, the policy interpretation c
 |-----------|-----------|
 | Language | Python 3.10+ |
 | Async Runtime | asyncio |
-| ML Model | scikit-learn `RandomForestClassifier` (v1.6.1), trained on 10K samples |
-| Model Serialization | joblib (v1.5.3) |
-| Training Data | numpy (v2.0.2), pandas (v2.3.3) |
+| ML Model | scikit-learn `RandomForestClassifier`, trained on 10K samples |
+| Model Serialization | joblib |
+| Training Data | numpy, pandas |
 | Hyperparameter Tuning | scikit-learn `GridSearchCV` (5-fold CV) |
 | NLP / Policy Engine | Rule-based keyword matching (future: fine-tuned BERT/RoBERTa) |
 | LLM Integration | OpenAI GPT-4o-mini via async client |

@@ -159,8 +159,12 @@ FIELD EXTRACTION RULES:
    - "Gross Total Rs:" followed by amount (most common in hospital bills)
    - "Total Amount", "Claim Amount" with currency
    - Any amount with INR/Rs/₹ symbols
+   - Extract ONLY the numeric value (remove currency symbols, keep commas/decimals)
+   - Example: "Gross Total Rs: 45,000.00" → extract "45000.00" or "45000"
 
-CRITICAL: Extract the actual name even if the label is garbled. If you see "Mr. MANIKANDAN B" anywhere in the text, that's the patient_name.
+CRITICAL: 
+- Extract the actual name even if the label is garbled.
+- For total_claim_amount, extract the NUMBER only, without Rs/₹/INR symbols
 
 Output ONLY valid JSON. Use null only if truly not found.
 
@@ -172,6 +176,7 @@ Apollo Hospitals
 Date of Admission: 02-Feb-2021
 Date of Discharge: 06-Feb-2021
 Diagnosis: B/L HIP AVASCULAR NECROSIS
+Gross Total Rs: 45,000.00
 
 JSON Output:
 ```json
@@ -182,7 +187,7 @@ JSON Output:
   "diagnosis": "B/L HIP AVASCULAR NECROSIS",
   "admission_date": "02-Feb-2021",
   "discharge_date": "06-Feb-2021",
-  "total_claim_amount": null
+  "total_claim_amount": "45000.00"
 }}
 ```
 
@@ -201,6 +206,11 @@ JSON Output:
             )
             raw_output = response.get("content", "")
             
+            print(f"\n🤖 LLM RAW RESPONSE:")
+            print("-"*80)
+            print(raw_output[:500])
+            print("-"*80)
+            
             # Extract JSON block using regex
             json_match = re.search(r"```json\n(.*?)```", raw_output, re.DOTALL)
             if json_match:
@@ -210,6 +220,10 @@ JSON Output:
             
             # Parse and validate
             parsed_dict = json.loads(cleaned_output)
+            
+            print(f"\n✅ LLM EXTRACTED FIELDS:")
+            for k, v in parsed_dict.items():
+                print(f"  {k}: {v}")
             
             if PYDANTIC_AVAILABLE:
                 validated_data = InsuranceClaim(**parsed_dict)
@@ -259,7 +273,7 @@ JSON Output:
                 r"Discharged\s+on[:\-]?\s*([^\n]+)",
             ],
             "total_claim_amount": [
-                r"Gross\s+Total\s+Rs[:\-]?\s*([0-9,]+(?:\.\d{2})?)",
+                r"Gross\s+Total\s+Rs\.?[:\-\s]*([0-9,]+(?:\.\d{2})?)",
                 r"(?:Total\s+)?(?:Claim\s+)?Amount[:\-]?\s*(?:INR|Rs\.?|₹)?\s*([0-9,]+(?:\.\d{2})?)",
                 r"Total[:\-]?\s*(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.\d{2})?)",
                 r"(?:INR|Rs\.?|₹)\s*([0-9,]+(?:\.\d{2})?)",
@@ -333,12 +347,28 @@ JSON Output:
         # Combine document text from image and PDF data
         document_text = ""
         if pdf_data and "output" in pdf_data and "extracted_text" in pdf_data["output"]:
-            document_text += pdf_data["output"]["extracted_text"]
+            pdf_text = pdf_data["output"]["extracted_text"]
+            document_text += pdf_text
+            print(f"\n📄 PDF OCR TEXT ({len(pdf_text)} chars):")
+            print("-"*80)
+            print(pdf_text[:500])
+            print("-"*80)
         if image_data and "output" in image_data and "extracted_text" in image_data["output"]:
-            document_text += "\n" + image_data["output"]["extracted_text"]
+            image_text = image_data["output"]["extracted_text"]
+            document_text += "\n" + image_text
+            print(f"\n🖼️ IMAGE OCR TEXT ({len(image_text)} chars):")
+            print("-"*80)
+            print(image_text[:500])
+            print("-"*80)
         
         if not document_text:
             document_text = "Sample claim document"  # Fallback for testing
+        
+        print(f"\n📋 COMBINED TEXT FOR EXTRACTION ({len(document_text)} chars):")
+        print("-"*80)
+        print(document_text[:500])
+        print("-"*80)
+        
         reasoning.append("Starting LLM-based JSON extraction")
         
         # Step 1: Extract requirements
