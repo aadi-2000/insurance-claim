@@ -491,9 +491,13 @@ class OrchestratorAgent:
         try:
             results["billing"] = await agents["billing"].process(results)
             log(self._log_step("RESULT", f"Billing agent completed: conf={results['billing']['confidence']}", "billing"))
+            billing_reasoning = results.get("billing", {}).get("reasoning", [])
+            for line in billing_reasoning[:4]:
+                log(self._log_step("DETAIL", line, "billing"))
         except Exception as e:
             log(self._log_step("ERROR", f"Billing agent failed: {e}", "billing"))
             results["billing"] = self._create_error_result("Billing Agent", "Siri Spandana", str(e))
+        
 
         # ---- Step 6: Fraud Detection ----
         log(self._log_step("PIPELINE", "Starting Fraud Detection Agent", "fraud"))

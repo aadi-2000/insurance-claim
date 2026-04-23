@@ -405,8 +405,15 @@ JSON Output:
         # Calculate completeness score
         completeness_score = 1.0 - (len(missing_fields) / len(REQUIRED_FIELDS))
         
+        requirements_met = len(missing_fields) == 0
+
+        print("[REQUIREMENTS] extracted_requirements:", extracted_dict)
+        print("[REQUIREMENTS] missing_fields:", missing_fields)
+        print("[REQUIREMENTS] requirements_met:", requirements_met)
+        print("[REQUIREMENTS] completeness_score:", completeness_score)
+
         output = {
-            "requirements_met": len(missing_fields) == 0,
+            "requirements_met": requirements_met,
             "extracted_requirements": extracted_dict,
             "missing_fields": missing_fields,
             "mandatory_docs": {
