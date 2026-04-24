@@ -56,6 +56,8 @@ class BillingAgent:
                 "single deluxe",
                 "deluxe room",
                 "monitoring charges",
+                "bedside monitoring",
+                "oxygen support charges",
             ],
             "procedure_charges": [
                 "procedure",
@@ -65,6 +67,7 @@ class BillingAgent:
                 "ot charges",
                 "surgical",
                 "appendectomy",
+                "appendicectomy",
                 "angioplasty",
                 "stent",
             ],
@@ -77,6 +80,7 @@ class BillingAgent:
                 "capsule",
                 "injection",
                 "antibiotic",
+                "iv antibiotics",
             ],
             "investigations": [
                 "lab",
@@ -92,6 +96,9 @@ class BillingAgent:
                 "ultrasound",
                 "investigation",
                 "blood panel",
+                "chest x-ray",
+                "hrct",
+                "thorax",
             ],
             "consumables": [
                 "consumable",
@@ -100,6 +107,7 @@ class BillingAgent:
                 "catheter",
                 "dressing",
                 "sutures",
+                "respiratory consumables",
             ],
             "doctor_fees": [
                 "doctor fee",
@@ -113,16 +121,21 @@ class BillingAgent:
                 "professional fee",
                 "visit charges",
                 "specialist visit",
+                "physician visit",
+                "pulmonology specialist consultation",
             ],
             "non_payable": [
                 "registration",
                 "file",
                 "file handling",
+                "file processing",
                 "welcome kit",
                 "kit charge",
                 "convenience kit",
                 "patient kit",
+                "patient amenity kit",
                 "attender",
+                "visitor meal",
                 "meal",
                 "food",
                 "service charge",
@@ -139,6 +152,7 @@ class BillingAgent:
             "kit",
             "convenience",
             "attender",
+            "visitor meal",
             "meal",
             "food",
             "service charge",
@@ -155,77 +169,282 @@ class BillingAgent:
 
         return "miscellaneous"
 
-    def _extract_line_items(self, text: str) -> List[Tuple[str, float, str]]:
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
+    def _has_billing_keyword(self, text: str) -> bool:
+        lower = text.lower()
+        category_keywords = self._get_category_keywords()
+
+        flat_keywords = []
+        for keywords in category_keywords.values():
+            flat_keywords.extend(keywords)
+
+        generic_keywords = [
+            "charges",
+            "charge",
+            "amount",
+            "bill",
+            "receipt",
+            "invoice",
+            "fee",
+            "fees",
+        ]
+
+        return any(k in lower for k in flat_keywords + generic_keywords)
+
+    def _looks_like_date_or_metadata_amount(self, line: str, amount: float) -> bool:
+        lower = line.lower()
+
+        # Skip common years when the line looks like a date/treatment sentence, not a bill row
+        if 1900 <= amount <= 2100:
+            month_names = [
+                "january", "february", "march", "april", "may", "june",
+                "july", "august", "september", "october", "november", "december",
+                "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+            ]
+            if any(m in lower for m in month_names):
+                return True
+            if "date" in lower:
+                return True
+
+        metadata_keywords = [
+            "patient name",
+            "policy number",
+            "uhid",
+            "hospital name",
+            "diagnosis",
+            "primary diagnosis",
+            "admission date",
+            "discharge date",
+            "claim status",
+            "documents attached",
+            "treatment details",
+            "summary:",
+            "clinical summary",
+            "authorized signatory",
+            "billing executive",
+            "attending consultant",
+            "ward category",
+            "tpa / insurer",
+            "mode of payment",
+        ]
+
+        if any(k in lower for k in metadata_keywords):
+            return True
+
+        return False
+
+    def _extract_table_line_items(self, lines: List[str]) -> List[Tuple[str, float, str]]:
         line_items: List[Tuple[str, float, str]] = []
-
-        print("[BILLING][DEBUG] raw line count:", len(lines))
-        for idx, line in enumerate(lines[:120], 1):
-            print(f"[BILLING][DEBUG] line {idx}: {line}")
-
         seen_entries = set()
 
-        # Only parse the itemized bill section between Page 2 table start and Page 3 summary
         start_idx = None
         end_idx = None
+        table_mode = None  # "five_col" or "four_col"
 
-        for idx, line in enumerate(lines):
-            if line.lower() == "description" and idx + 3 < len(lines):
-                if lines[idx + 1].lower() == "qty" and lines[idx + 2].lower() == "rate" and lines[idx + 3].lower() == "amount":
-                    start_idx = idx + 4
-                    break
-
-        for idx, line in enumerate(lines):
-            if line.lower() == "--- page 3 ---":
-                end_idx = idx
+        # 5-column header:
+        # Sl. / No. / Description / Qty/Days / Rate (INR) / Amount (INR)
+        for idx in range(len(lines) - 5):
+            window = [lines[idx + j].lower().strip() for j in range(6)]
+            if (
+                window[0] == "sl."
+                and window[1] == "no."
+                and window[2] == "description"
+                and "qty" in window[3]
+                and "rate" in window[4]
+                and "amount" in window[5]
+            ):
+                start_idx = idx + 6
+                table_mode = "five_col"
                 break
 
+        # 4-column header:
+        # Description / Qty / Rate / Amount
         if start_idx is None:
-            print("[BILLING][WARN] Could not find table header. No line items extracted.")
+            for idx in range(len(lines) - 3):
+                window = [lines[idx + j].lower().strip() for j in range(4)]
+                if (
+                    window[0] == "description"
+                    and "qty" in window[1]
+                    and "rate" in window[2]
+                    and "amount" in window[3]
+                ):
+                    start_idx = idx + 4
+                    table_mode = "four_col"
+                    break
+
+        stop_markers = {
+            "gross amount",
+            "net payable",
+            "claim amount submitted",
+            "billing summary",
+            "authorized signatory",
+        }
+
+        if start_idx is not None:
+            for idx in range(start_idx, len(lines)):
+                line_lower = lines[idx].lower().strip()
+                if line_lower in stop_markers or line_lower.startswith("gross amount") or line_lower.startswith("net payable") or line_lower.startswith("claim amount submitted"):
+                    end_idx = idx
+                    break
+
+        if start_idx is None:
             return line_items
 
         if end_idx is None:
             end_idx = len(lines)
 
         table_lines = lines[start_idx:end_idx]
+        print("[BILLING][DEBUG] table mode:", table_mode)
         print("[BILLING][DEBUG] table line count:", len(table_lines))
 
         i = 0
-        while i + 3 < len(table_lines):
-            label = table_lines[i]
-            qty = table_lines[i + 1]
-            rate = table_lines[i + 2]
-            amount_line = table_lines[i + 3]
 
-            label_lower = label.lower()
+        if table_mode == "five_col":
+            while i + 4 < len(table_lines):
+                serial_no = table_lines[i].strip()
+                label = table_lines[i + 1].strip()
+                qty = table_lines[i + 2].strip()
+                rate = table_lines[i + 3].strip()
+                amount_line = table_lines[i + 4].strip()
 
-            # Validate table row structure:
-            # label / qty-or-dash / rate-or-dash / amount
-            qty_ok = qty == "-" or bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", qty))
-            rate_ok = rate == "-" or bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", rate))
-            amount_ok = bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", amount_line))
+                serial_ok = bool(re.fullmatch(r"\d+", serial_no))
+                qty_ok = qty == "-" or bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", qty))
+                rate_ok = rate == "-" or bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", rate))
+                amount_ok = bool(re.fullmatch(r"-?[\d,]+(?:\.\d{1,2})?", amount_line))
 
-            if not (qty_ok and rate_ok and amount_ok):
-                i += 1
-                continue
+                if not (serial_ok and qty_ok and rate_ok and amount_ok):
+                    i += 1
+                    continue
 
-            amount = self._parse_amount(amount_line)
-            if amount < 10:
+                amount = self._parse_amount(amount_line)
+                if amount < 10:
+                    i += 5
+                    continue
+
+                category = self._match_category(label)
+                raw_line = f"{serial_no} {label} {qty} {rate} {amount_line}"
+                dedupe_key = (category, amount, re.sub(r"\s+", " ", label.lower()).strip())
+
+                if dedupe_key not in seen_entries:
+                    seen_entries.add(dedupe_key)
+                    print(f"[BILLING][ROW MATCHED] {category} | amount: {amount} | text: {raw_line}")
+                    line_items.append((category, amount, raw_line))
+
+                i += 5
+
+        elif table_mode == "four_col":
+            while i + 3 < len(table_lines):
+                label = table_lines[i].strip()
+                qty = table_lines[i + 1].strip()
+                rate = table_lines[i + 2].strip()
+                amount_line = table_lines[i + 3].strip()
+
+                qty_ok = qty == "-" or bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", qty))
+                rate_ok = rate == "-" or bool(re.fullmatch(r"[\d,]+(?:\.\d{1,2})?", rate))
+                amount_ok = bool(re.fullmatch(r"-?[\d,]+(?:\.\d{1,2})?", amount_line))
+
+                if not (qty_ok and rate_ok and amount_ok):
+                    i += 1
+                    continue
+
+                amount = self._parse_amount(amount_line)
+                if amount < 10:
+                    i += 4
+                    continue
+
+                category = self._match_category(label)
+                raw_line = f"{label} {qty} {rate} {amount_line}"
+                dedupe_key = (category, amount, re.sub(r"\s+", " ", label.lower()).strip())
+
+                if dedupe_key not in seen_entries:
+                    seen_entries.add(dedupe_key)
+                    print(f"[BILLING][ROW MATCHED] {category} | amount: {amount} | text: {raw_line}")
+                    line_items.append((category, amount, raw_line))
+
                 i += 4
-                continue
-
-            category = self._match_category(label)
-            raw_line = f"{label} {qty} {rate} {amount_line}"
-            dedupe_key = (category, amount, re.sub(r"\s+", " ", label_lower).strip())
-
-            if dedupe_key not in seen_entries:
-                seen_entries.add(dedupe_key)
-                print(f"[BILLING][ROW MATCHED] {category} | amount: {amount} | text: {raw_line}")
-                line_items.append((category, amount, raw_line))
-
-            i += 4
 
         return line_items
+
+    def _extract_simple_line_items(self, lines: List[str]) -> List[Tuple[str, float, str]]:
+        line_items: List[Tuple[str, float, str]] = []
+        seen_entries = set()
+
+        skip_keywords = [
+            "--- page",
+            "billing summary",
+            "authorized signatory",
+            "patient name",
+            "policy number",
+            "uhid",
+            "diagnosis",
+            "primary diagnosis",
+            "admission date",
+            "discharge date",
+            "summary:",
+            "clinical summary",
+            "gross amount",
+            "discount",
+            "net payable amount",
+            "claim amount submitted",
+            "insurance claim document",
+            "documents attached",
+            "claim status",
+            "treatment details",
+            "hospital name",
+            "ward category",
+            "tpa / insurer",
+            "mode of payment",
+            "billing executive",
+            "attending consultant",
+        ]
+
+        for line in lines:
+            lower = line.lower().strip()
+
+            if not lower or any(k in lower for k in skip_keywords):
+                continue
+
+            amount_matches = re.findall(r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)", lower)
+            if not amount_matches:
+                continue
+
+            amount = self._parse_amount(amount_matches[-1])
+            if amount < 10:
+                continue
+
+            if self._looks_like_date_or_metadata_amount(line, amount):
+                continue
+
+            # Very important: only treat simple one-line rows as billing if they look like billing text
+            if not self._has_billing_keyword(line):
+                continue
+
+            category = self._match_category(line)
+            if category == "miscellaneous":
+                continue
+
+            dedupe_key = (category, amount, re.sub(r"\s+", " ", lower).strip())
+            if dedupe_key in seen_entries:
+                continue
+
+            seen_entries.add(dedupe_key)
+            print(f"[BILLING][FALLBACK MATCHED] {category} | amount: {amount} | text: {line}")
+            line_items.append((category, amount, line))
+
+        return line_items
+
+    def _extract_line_items(self, text: str) -> List[Tuple[str, float, str]]:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+        print("[BILLING][DEBUG] raw line count:", len(lines))
+        for idx, line in enumerate(lines[:120], 1):
+            print(f"[BILLING][DEBUG] line {idx}: {line}")
+
+        line_items = self._extract_table_line_items(lines)
+        if line_items:
+            return line_items
+
+        print("[BILLING][WARN] No table header found. Falling back to simple line-based parsing.")
+        return self._extract_simple_line_items(lines)
 
     def _build_breakdown(self, line_items: List[Tuple[str, float, str]], context: Dict[str, Any]) -> Dict[str, Any]:
         breakdown: Dict[str, Any] = {}
@@ -291,7 +510,7 @@ class BillingAgent:
         total_claimed = sum(item["claimed"] for item in breakdown.values())
         total_approved = sum(item["approved"] for item in breakdown.values())
 
-        if declared_total > 0:
+        if declared_total > 0 and total_claimed > 0:
             mismatch_ratio = abs(total_claimed - declared_total) / max(declared_total, 1)
             if mismatch_ratio > 0.20:
                 score += 0.15
@@ -306,6 +525,29 @@ class BillingAgent:
             score += 0.20
 
         return min(score, 1.0)
+    
+    def _extract_preferred_total(self, text: str) -> float:
+        text_lower = text.lower()
+
+        # STRICT priority order
+        priority_keywords = [
+            "claim amount submitted",
+            "total claim amount",
+            "net payable",
+            "gross amount",
+        ]
+
+        for keyword in priority_keywords:
+            for line in text_lower.splitlines():
+                if keyword in line:
+                    matches = re.findall(r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)", line)
+                    if matches:
+                        value = self._parse_amount(matches[-1])
+                        print(f"[BILLING][TOTAL SELECTED] {keyword} -> {value}")
+                        return value
+
+        return 0.0
+    
 
     async def process(self, claim_data: Dict) -> Dict[str, Any]:
         start = time.time()
@@ -334,6 +576,43 @@ class BillingAgent:
             for item in line_items:
                 print("[BILLING][PARSE] item:", item)
 
+            declared_total_preview = self._parse_amount(extracted_requirements.get("total_claim_amount"))
+
+            # Fallback for claim-summary documents with declared total but no itemized bill rows
+            if len(line_items) == 0 and declared_total_preview > 0:
+                print("[BILLING][FALLBACK] No itemized billing rows found. Using declared claim amount fallback.")
+
+                output = {
+                    "total_claimed": declared_total_preview,
+                    "total_approved": declared_total_preview,
+                    "breakdown": {},
+                    "anomaly_score": 0.05,
+                    "pricing_benchmark": "Declared-total fallback",
+                    "deductions": 0.0,
+                }
+
+                reasoning = [
+                    "No itemized billing rows were found in the uploaded claim document.",
+                    f"Used declared claim amount fallback of INR {declared_total_preview:.2f}.",
+                    "Approved amount was kept equal to claimed amount because no bill-line evidence was available for deductions.",
+                    "Billing anomaly score kept low due to absence of contradictory itemized billing data.",
+                ]
+
+                elapsed = time.time() - start
+                print("[BILLING][FINAL OUTPUT]", output)
+                print("[BILLING] END")
+                print("=" * 80 + "\n")
+
+                return {
+                    "agent": self.AGENT_NAME,
+                    "owner": self.OWNER,
+                    "status": "success",
+                    "reasoning": reasoning,
+                    "output": output,
+                    "confidence": 0.85,
+                    "processing_time": f"{elapsed:.1f}s",
+                }
+
             context = {
                 "total_claim_amount": extracted_requirements.get("total_claim_amount"),
                 "diagnosis": extracted_requirements.get("diagnosis"),
@@ -344,13 +623,15 @@ class BillingAgent:
 
             breakdown = self._build_breakdown(line_items, context)
 
-            declared_total = self._parse_amount(extracted_requirements.get("total_claim_amount"))
+            declared_total = self._extract_preferred_total(combined_text)
+            if declared_total == 0:
+                declared_total = self._parse_amount(extracted_requirements.get("total_claim_amount"))
+
             print("[BILLING][DEBUG] declared_total parsed:", declared_total)
 
             parsed_total = sum(item["claimed"] for item in breakdown.values())
             approved_total_before_clamp = sum(item["approved"] for item in breakdown.values())
 
-            # Billing totals should reflect parsed bill rows
             effective_claimed_total = parsed_total if parsed_total > 0 else declared_total
 
             approved_total = approved_total_before_clamp
@@ -367,50 +648,66 @@ class BillingAgent:
             print("[BILLING][TOTALS] approved_total_after_clamp:", approved_total)
             print("[BILLING][TOTALS] deductions:", deductions)
 
-            reasoning = [
-                "Collected upstream document text from image/PDF agents",
-                "Extracted billing line items using row-based table parsing",
-                "Grouped charges into billing categories",
-                "Applied rule-based approval thresholds by category",
-                f"Parsed total claimed: {parsed_total:.2f}",
-                f"Approved total: {approved_total:.2f}",
-                f"Anomaly score computed as {anomaly_score:.2f}",
-            ]
+            reasoning = []
 
-            if "non_payable" in breakdown:
-                reasoning.append(
-                    f"Rejected non-payable charges totaling INR {breakdown['non_payable']['claimed']:.2f}"
-                )
+            reasoning.append(f"Parsed {len(line_items)} billing line items from uploaded documents.")
 
-            if "room_charges" in breakdown and breakdown["room_charges"]["status"] == "partial":
-                room_deduction = breakdown["room_charges"]["claimed"] - breakdown["room_charges"]["approved"]
+            if breakdown:
                 reasoning.append(
-                    f"Applied room charge cap; reduced room charges by INR {room_deduction:.2f}"
+                    f"Identified billing categories: {', '.join(k.replace('_', ' ') for k in sorted(breakdown.keys()))}."
                 )
-            if "doctor_fees" in breakdown and breakdown["doctor_fees"]["status"] == "partial":
-                doctor_deduction = breakdown["doctor_fees"]["claimed"] - breakdown["doctor_fees"]["approved"]
-                reasoning.append(
-                    f"Applied doctor fee threshold; reduced doctor fees by INR {doctor_deduction:.2f}"
-                )
+            else:
+                reasoning.append("No billing categories were identified from itemized lines.")
 
-            if "consumables" in breakdown and breakdown["consumables"]["status"] == "partial":
-                consumable_deduction = breakdown["consumables"]["claimed"] - breakdown["consumables"]["approved"]
-                reasoning.append(
-                    f"Applied consumables threshold; reduced consumables by INR {consumable_deduction:.2f}"
-                )
+            reasoning.append(
+                f"Computed claimed amount as INR {effective_claimed_total:.2f} and approved amount as INR {approved_total:.2f}."
+            )
+
+            for category in sorted(breakdown.keys()):
+                entry = breakdown[category]
+                claimed = entry.get("claimed", 0.0)
+                approved = entry.get("approved", 0.0)
+                status = entry.get("status", "approved")
+                reason = entry.get("reason", "")
+
+                if status == "rejected":
+                    reasoning.append(
+                        f"{category.replace('_', ' ').title()} rejected: claimed INR {claimed:.2f}, approved INR {approved:.2f}. Reason: {reason}."
+                    )
+                elif status == "partial":
+                    reduction = claimed - approved
+                    reasoning.append(
+                        f"{category.replace('_', ' ').title()} partially approved: claimed INR {claimed:.2f}, approved INR {approved:.2f}, reduction INR {reduction:.2f}. Reason: {reason}."
+                    )
+                else:
+                    reasoning.append(
+                        f"{category.replace('_', ' ').title()} approved in full at INR {approved:.2f}."
+                    )
+
             if deductions > 0:
-                reasoning.append(f"Total billing deductions computed as INR {deductions:.2f}")
+                reasoning.append(f"Total deductions applied: INR {deductions:.2f}.")
+            else:
+                reasoning.append("No deductions were applied.")
 
-            if anomaly_score > 0:
-                reasoning.append(f"Billing anomaly score assessed at {anomaly_score:.2f}")
-            reasoning.append(f"Parsed {len(line_items)} bill line items across {len(breakdown)} billing categories")
-            reasoning.append(f"Billing categories identified: {', '.join(sorted(breakdown.keys()))}")
+            if anomaly_score >= 0.5:
+                reasoning.append(
+                    f"Billing anomaly score is high at {anomaly_score:.2f}, indicating significant mismatch or adjustment."
+                )
+            elif anomaly_score >= 0.2:
+                reasoning.append(
+                    f"Billing anomaly score is moderate at {anomaly_score:.2f}, reflecting some adjustments in billing review."
+                )
+            else:
+                reasoning.append(
+                    f"Billing anomaly score is low at {anomaly_score:.2f}, indicating the bill is broadly consistent."
+                )
+
             output = {
                 "total_claimed": effective_claimed_total,
                 "total_approved": approved_total,
                 "breakdown": breakdown,
                 "anomaly_score": anomaly_score,
-                "pricing_benchmark": "Rule-based benchmark v5",
+                "pricing_benchmark": "Rule-based benchmark v6",
                 "deductions": deductions,
             }
 
@@ -427,13 +724,43 @@ class BillingAgent:
             await asyncio.sleep(0.1)
 
             elapsed = time.time() - start
+
+            # --- FINAL STRONG CONFIDENCE LOGIC ---
+            base_conf = 1.0 - (anomaly_score * 0.3)
+            line_score = min(len(line_items) / 8, 1.0)
+            category_score = min(len(breakdown) / 5, 1.0)
+
+            consistency_score = 1.0
+            if declared_total > 0 and parsed_total > 0:
+                mismatch_ratio = abs(parsed_total - declared_total) / declared_total
+                if mismatch_ratio > 0.2:
+                    consistency_score = 0.75
+                elif mismatch_ratio > 0.1:
+                    consistency_score = 0.9
+
+            confidence = (
+                base_conf * 0.4 +
+                line_score * 0.3 +
+                category_score * 0.2 +
+                consistency_score * 0.1
+            )
+
+            confidence = max(0.85, min(confidence, 0.98))
+
+            print("[CONF DEBUG] anomaly:", anomaly_score)
+            print("[CONF DEBUG] base_conf:", base_conf)
+            print("[CONF DEBUG] line_score:", line_score)
+            print("[CONF DEBUG] category_score:", category_score)
+            print("[CONF DEBUG] consistency_score:", consistency_score)
+            print("[CONF DEBUG] FINAL:", confidence)
+
             return {
                 "agent": self.AGENT_NAME,
                 "owner": self.OWNER,
                 "status": "success",
                 "reasoning": reasoning,
                 "output": output,
-                "confidence": max(0.55, 1.0 - anomaly_score / 2),
+                "confidence": confidence,
                 "processing_time": f"{elapsed:.1f}s",
             }
 
@@ -452,7 +779,7 @@ class BillingAgent:
                     "total_approved": 0.0,
                     "breakdown": {},
                     "anomaly_score": 0.0,
-                    "pricing_benchmark": "Rule-based benchmark v5",
+                    "pricing_benchmark": "Rule-based benchmark v6",
                     "deductions": 0.0,
                 },
                 "confidence": 0.0,
