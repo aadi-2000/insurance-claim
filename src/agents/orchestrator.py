@@ -1009,6 +1009,7 @@ class OrchestratorAgent:
             "billing_anomaly_score": billing_anomaly_score,
             "billing_deductions": billing_deductions,
             "billing_breakdown": billing_breakdown,
+            "billing_summary": billing_output.get("billing_summary", {}),
         }
             
 

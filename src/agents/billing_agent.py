@@ -582,6 +582,17 @@ class BillingAgent:
             if len(line_items) == 0 and declared_total_preview > 0:
                 print("[BILLING][FALLBACK] No itemized billing rows found. Using declared claim amount fallback.")
 
+                billing_summary = {
+                    "line_items_parsed": 0,
+                    "categories_detected": [],
+                    "non_payable_total": 0.0,
+                    "category_deductions": {},
+                    "deduction_reason_summary": [
+                        "No itemized billing found, used declared claim amount",
+                        "No deductions applied due to lack of bill-level detail"
+                    ],
+                }
+
                 output = {
                     "total_claimed": declared_total_preview,
                     "total_approved": declared_total_preview,
@@ -589,8 +600,9 @@ class BillingAgent:
                     "anomaly_score": 0.05,
                     "pricing_benchmark": "Declared-total fallback",
                     "deductions": 0.0,
+                    "billing_summary": billing_summary,
                 }
-
+                print("[BILLING][SUMMARY]", output["billing_summary"])
                 reasoning = [
                     "No itemized billing rows were found in the uploaded claim document.",
                     f"Used declared claim amount fallback of INR {declared_total_preview:.2f}.",
@@ -702,6 +714,47 @@ class BillingAgent:
                     f"Billing anomaly score is low at {anomaly_score:.2f}, indicating the bill is broadly consistent."
                 )
 
+
+            non_payable_total = breakdown.get("non_payable", {}).get("claimed", 0.0)
+
+            partial_deductions = {}
+            for category, entry in breakdown.items():
+                claimed = entry.get("claimed", 0.0)
+                approved = entry.get("approved", 0.0)
+                if approved < claimed:
+                    partial_deductions[category] = round(claimed - approved, 2)
+
+            billing_summary = {
+                "line_items_parsed": len(line_items),
+                "categories_detected": sorted(list(breakdown.keys())),
+                "non_payable_total": round(non_payable_total, 2),
+                "category_deductions": partial_deductions,
+                "deduction_reason_summary": [],
+            }
+
+            if non_payable_total > 0:
+                billing_summary["deduction_reason_summary"].append(
+                    f"Rejected non-payable charges worth INR {non_payable_total:.2f}"
+                )
+
+            if "room_charges" in partial_deductions:
+                billing_summary["deduction_reason_summary"].append(
+                    f"Room charges reduced by INR {partial_deductions['room_charges']:.2f} due to cap"
+                )
+
+            if "doctor_fees" in partial_deductions:
+                billing_summary["deduction_reason_summary"].append(
+                    f"Doctor fees reduced by INR {partial_deductions['doctor_fees']:.2f} due to threshold"
+                )
+
+            if "consumables" in partial_deductions:
+                billing_summary["deduction_reason_summary"].append(
+                    f"Consumables reduced by INR {partial_deductions['consumables']:.2f} due to threshold"
+                )
+
+            if not billing_summary["deduction_reason_summary"]:
+                billing_summary["deduction_reason_summary"].append("No billing deductions applied")
+
             output = {
                 "total_claimed": effective_claimed_total,
                 "total_approved": approved_total,
@@ -709,8 +762,9 @@ class BillingAgent:
                 "anomaly_score": anomaly_score,
                 "pricing_benchmark": "Rule-based benchmark v6",
                 "deductions": deductions,
+                "billing_summary": billing_summary,
             }
-
+            print("[BILLING][SUMMARY]", output["billing_summary"])
             print("[BILLING][FINAL OUTPUT]", output)
             print("[BILLING][OUTPUT] breakdown categories:", list(breakdown.keys()))
             print("[BILLING][OUTPUT] breakdown:", breakdown)

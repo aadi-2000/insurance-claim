@@ -478,6 +478,12 @@ export default function App() {
               <MetricBox label="Amount Approved" value={`₹${((result.claim_summary?.amount_approved || 0) / 1000).toFixed(0)}K`} color="#10b981" sub={`₹${(result.claim_summary?.amount_approved || 0).toLocaleString("en-IN")}`} />
               <MetricBox label="Confidence" value={`${((result.weighted_confidence || 0) * 100).toFixed(1)}%`} color="#06b6d4" sub="Weighted average" />
               <MetricBox label="Fraud Score" value={(result.claim_summary?.fraud_score || 0).toFixed(2)} color={(result.claim_summary?.fraud_score || 0) > 0.3 ? "#ef4444" : "#10b981"} sub={(result.claim_summary?.fraud_score || 0) > 0.3 ? "Elevated" : "Very Low Risk"} />
+              <MetricBox
+                      label="Billing Items"
+                      value={`${result.claim_summary?.billing_summary?.line_items_parsed || 0}`}
+                      color="#f59e0b"
+                      sub="Rows parsed"
+                    />
               <MetricBox 
                 label="Fraud Category" 
                 value={
@@ -589,6 +595,58 @@ export default function App() {
                 Billing Deductions: ₹{Number(result.claim_summary.billing_deductions || 0).toLocaleString("en-IN")}
                 </div>
                 </div>
+                
+                {result.claim_summary.billing_summary && (
+                  <div
+                    style={{
+                      marginBottom: 16,
+                      padding: 14,
+                      borderRadius: 10,
+                      background: "rgba(30,41,59,0.55)",
+                      border: "1px solid rgba(148,163,184,0.15)"
+                    }}
+                  >
+                    <div style={{ color: "#e2e8f0", fontWeight: 700, marginBottom: 10 }}>
+                      Billing Summary
+                    </div>
+
+                    <div style={{ color: "#94a3b8", fontSize: 13, marginBottom: 6 }}>
+                      Line Items Parsed: {Number(result.claim_summary.billing_summary.line_items_parsed || 0)}
+                    </div>
+
+                    <div style={{ color: "#94a3b8", fontSize: 13, marginBottom: 6 }}>
+                      Categories Detected: {
+                        result.claim_summary.billing_summary.categories_detected?.length
+                          ? result.claim_summary.billing_summary.categories_detected
+                              .map((c) => c.replaceAll("_", " "))
+                              .join(", ")
+                          : "None"
+                      }
+                    </div>
+
+                    <div style={{ color: "#94a3b8", fontSize: 13, marginBottom: 6 }}>
+                      Non-Payable Total: ₹{Number(result.claim_summary.billing_summary.non_payable_total || 0).toLocaleString("en-IN")}
+                    </div>
+
+                    <div style={{ color: "#e2e8f0", fontWeight: 600, fontSize: 13, marginTop: 10, marginBottom: 6 }}>
+                      Deduction Reasons
+                    </div>
+
+                    {result.claim_summary.billing_summary.deduction_reason_summary?.length ? (
+                      <ul style={{ margin: 0, paddingLeft: 18, color: "#94a3b8", fontSize: 13 }}>
+                        {result.claim_summary.billing_summary.deduction_reason_summary.map((reason, idx) => (
+                          <li key={idx} style={{ marginBottom: 4 }}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div style={{ color: "#94a3b8", fontSize: 13 }}>
+                        No billing summary available.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+
 
                 {result.claim_summary.billing_breakdown &&
                 Object.keys(result.claim_summary.billing_breakdown).length > 0 ? (
@@ -644,7 +702,16 @@ export default function App() {
                 {/* */}
                 {Object.entries(result.claim_summary || {})
                    // added billing relevant emelents to be rendered
-                  .filter(([key]) => !['status', 'missing_fields', 'action_required', 'claim_id','billing_anomaly_score','billing_deductions','billing_breakdown'].includes(key))
+                  .filter(([key]) => ![
+                          'status',
+                          'missing_fields',
+                          'action_required',
+                          'claim_id',
+                          'billing_anomaly_score',
+                          'billing_deductions',
+                          'billing_breakdown',
+                          'billing_summary'
+                        ].includes(key))
                   .map(([key, value]) => {
                     // Skip null/undefined values
                     if (value === null || value === undefined) return null;
