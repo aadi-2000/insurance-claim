@@ -22,7 +22,7 @@ from typing import List, Dict, Any
 import uvicorn
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
@@ -35,6 +35,7 @@ load_dotenv()
 
 from src.utils.logger import setup_logging
 from src.utils.claim_history import ClaimHistoryDatabase
+from src.utils.sse_manager import sse_manager
 from src.llm.gpt_client import GPTClient
 from src.agents.image_agent import ImageProcessingAgent
 from src.agents.pdf_agent import PDFProcessingAgent
@@ -152,6 +153,46 @@ async def get_config():
         return {"config": config}
     except Exception:
         return {"config": "Config not loaded"}
+
+
+@app.get("/api/process-claim-stream/{claim_id}")
+async def process_claim_stream(claim_id: str):
+    """
+    SSE endpoint for real-time agent status updates.
+    Client connects to this endpoint and receives updates as agents complete.
+    """
+    print(f"\n[APP] 🌐 SSE endpoint accessed for claim_id: {claim_id}")
+    
+    async def event_generator():
+        queue = sse_manager.create_stream(claim_id)
+        try:
+            while True:
+                # Wait for events with timeout
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    # Format as SSE
+                    yield f"data: {json.dumps(event)}\n\n"
+                    
+                    # If completion event, close stream
+                    if event.get("type") == "complete":
+                        break
+                except asyncio.TimeoutError:
+                    # Send keepalive comment
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            logger.info(f"SSE stream cancelled for claim {claim_id}")
+        finally:
+            sse_manager.remove_stream(claim_id, queue)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @app.get("/api/claim-history/stats")
@@ -300,7 +341,7 @@ async def reject_claim(claim_data: Dict[str, Any]):
 
 
 @app.post("/api/process-claim")
-async def process_claim(files: List[UploadFile] = File(...)):
+async def process_claim(files: List[UploadFile] = File(...), claim_id: str = Form(None)):
     """
     Process uploaded claim documents through the full agent pipeline.
 
@@ -310,12 +351,47 @@ async def process_claim(files: List[UploadFile] = File(...)):
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    logger.info(f"Processing claim with {len(files)} file(s)")
+    # Use claim_id from frontend or generate one if not provided
+    if not claim_id:
+        claim_id = f"claim_{int(time.time() * 1000)}"
+        print(f"\n[APP] ⚠️ No claim_id provided, generated: {claim_id}")
+    else:
+        print(f"\n[APP] ✓ Received claim_id from frontend: {claim_id}")
+    
+    print(f"{'='*80}")
+    print(f"[APP] 🆔 Using claim_id: {claim_id}")
+    print(f"[APP] Processing {len(files)} file(s)")
+    print(f"{'='*80}\n")
+    logger.info(f"Processing claim {claim_id} with {len(files)} file(s)")
     start_time = time.time()
 
     try:
         # Process all uploaded files
         all_results = {"image": {}, "pdf": {}}
+        has_image = False
+        has_pdf = False
+        
+        # Check file types first
+        for uploaded_file in files:
+            mime_type = uploaded_file.content_type or "application/octet-stream"
+            if mime_type.startswith("image/"):
+                has_image = True
+            elif mime_type == "application/pdf":
+                has_pdf = True
+        
+        # Send Orchestrator PROCESSING status at start
+        if sse_manager:
+            await sse_manager.send_agent_status(claim_id, "Master Orchestrator", "PROCESSING")
+        
+        # Small delay to ensure SSE connection is fully established
+        await asyncio.sleep(0.5)
+        
+        # Send SKIPPED status early for agents that won't be used
+        if sse_manager:
+            if not has_image:
+                await sse_manager.send_agent_status(claim_id, "Image Processing Agent", "SKIPPED")
+            if not has_pdf:
+                await sse_manager.send_agent_status(claim_id, "PDF Processing Agent", "SKIPPED")
         
         for uploaded_file in files:
             file_bytes = await uploaded_file.read()
@@ -326,7 +402,22 @@ async def process_claim(files: List[UploadFile] = File(...)):
             
             # Process based on file type
             if mime_type.startswith("image/"):
+                # Send PROCESSING status
+                if sse_manager:
+                    await sse_manager.send_agent_status(claim_id, "Image Processing Agent", "PROCESSING")
+                    await asyncio.sleep(0.1)  # Small delay to ensure frontend receives PROCESSING status
+                
                 result = await agents["image"].process(file_bytes, filename, mime_type)
+                
+                # Send SSE event for Image agent completion
+                if sse_manager:
+                    await sse_manager.send_agent_status(
+                        claim_id, 
+                        "Image Processing Agent", 
+                        "COMPLETED", 
+                        result.get('confidence', 0)
+                    )
+                
                 # Merge with existing image results
                 if all_results["image"] and all_results["image"].get("output"):
                     existing_text = all_results["image"].get("output", {}).get("extracted_text", "")
@@ -335,7 +426,22 @@ async def process_claim(files: List[UploadFile] = File(...)):
                 all_results["image"] = result
                 
             elif mime_type == "application/pdf":
+                # Send PROCESSING status
+                if sse_manager:
+                    await sse_manager.send_agent_status(claim_id, "PDF Processing Agent", "PROCESSING")
+                    await asyncio.sleep(0.1)  # Small delay to ensure frontend receives PROCESSING status
+                
                 result = await agents["pdf"].process(file_bytes, filename)
+                
+                # Send SSE event for PDF agent completion
+                if sse_manager:
+                    await sse_manager.send_agent_status(
+                        claim_id, 
+                        "PDF Processing Agent", 
+                        "COMPLETED", 
+                        result.get('confidence', 0)
+                    )
+                
                 # Merge with existing PDF results
                 if all_results["pdf"] and all_results["pdf"].get("output"):
                     existing_text = all_results["pdf"].get("output", {}).get("extracted_text", "")
@@ -354,14 +460,28 @@ async def process_claim(files: List[UploadFile] = File(...)):
             image_result=all_results.get("image", {}),
             pdf_result=all_results.get("pdf", {}),
             on_log=on_log,
+            claim_id=claim_id,
         )
 
         elapsed = time.time() - start_time
         logger.info(f"Claim processed in {elapsed:.1f}s - Decision: {result.decision}")
 
+        # Send Orchestrator COMPLETED status
+        if sse_manager:
+            await sse_manager.send_agent_status(claim_id, "Master Orchestrator", "COMPLETED", result.weighted_confidence)
+        
+        # Send completion event via SSE with only agent summaries
+        if sse_manager:
+            print(f"\n[APP] 📤 Sending completion event for claim_id: {claim_id}")
+            completion_data = {
+                "decision": result.decision,
+                "agent_summaries": result.agent_summaries,
+                "weighted_confidence": result.weighted_confidence
+            }
+            await sse_manager.send_completion(claim_id, completion_data)
+
         # Store session data for resume functionality if claim is on HOLD
         if result.status == "pending_documents":
-            claim_id = result.claim_summary.get("claim_id", f"claim_{int(time.time())}")
             claim_sessions[claim_id] = {
                 "image_result": all_results.get("image", {}),
                 "pdf_result": all_results.get("pdf", {}),
@@ -397,6 +517,30 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
     logger.info(f"Resuming claim {claim_id} with {len(files)} additional file(s)")
     start_time = time.time()
     
+    # Send Orchestrator PROCESSING status for resume
+    if sse_manager:
+        await sse_manager.send_agent_status(claim_id, "Master Orchestrator", "PROCESSING")
+    
+    # Small delay to ensure SSE connection is fully established
+    await asyncio.sleep(0.5)
+    
+    # Check file types for SKIPPED status
+    has_image = False
+    has_pdf = False
+    for uploaded_file in files:
+        mime_type = uploaded_file.content_type or "application/octet-stream"
+        if mime_type.startswith("image/"):
+            has_image = True
+        elif mime_type == "application/pdf":
+            has_pdf = True
+    
+    # Send SKIPPED status for agents that won't be used
+    if sse_manager:
+        if not has_image:
+            await sse_manager.send_agent_status(claim_id, "Image Processing Agent", "SKIPPED")
+        if not has_pdf:
+            await sse_manager.send_agent_status(claim_id, "PDF Processing Agent", "SKIPPED")
+    
     # Retrieve previous session data
     previous_session = claim_sessions.get(claim_id, {})
     if previous_session:
@@ -421,24 +565,53 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
         
         # Process based on file type
         if mime_type.startswith("image/"):
+            # Send PROCESSING status
+            if sse_manager:
+                await sse_manager.send_agent_status(claim_id, "Image Processing Agent", "PROCESSING")
+            
             result = await agents["image"].process(file_bytes, filename, mime_type)
+            
+            # Send COMPLETED status
+            if sse_manager:
+                await sse_manager.send_agent_status(claim_id, "Image Processing Agent", "COMPLETED", result.get('confidence', 0))
+            
             # Merge with existing image results
-            if all_results["image"]:
+            if all_results["image"] and all_results["image"].get("output"):
                 # Combine extracted text
                 existing_text = all_results["image"].get("output", {}).get("extracted_text", "")
                 new_text = result.get("output", {}).get("extracted_text", "")
-                result["output"]["extracted_text"] = existing_text + "\n" + new_text
+                if existing_text and new_text:
+                    result["output"]["extracted_text"] = existing_text + "\n\n" + new_text
+                elif existing_text:
+                    result["output"]["extracted_text"] = existing_text
             all_results["image"] = result
             
         elif mime_type == "application/pdf":
+            # Send PROCESSING status
+            if sse_manager:
+                await sse_manager.send_agent_status(claim_id, "PDF Processing Agent", "PROCESSING")
+                await asyncio.sleep(0.1)  # Small delay to ensure frontend receives PROCESSING status
+            
             result = await agents["pdf"].process(file_bytes, filename)
-            if all_results["pdf"]:
+            
+            # Send COMPLETED status
+            if sse_manager:
+                await sse_manager.send_agent_status(claim_id, "PDF Processing Agent", "COMPLETED", result.get('confidence', 0))
+            
+            if all_results["pdf"] and all_results["pdf"].get("output"):
                 existing_text = all_results["pdf"].get("output", {}).get("extracted_text", "")
                 new_text = result.get("output", {}).get("extracted_text", "")
-                result["output"]["extracted_text"] = existing_text + "\n" + new_text
+                if existing_text and new_text:
+                    result["output"]["extracted_text"] = existing_text + "\n\n" + new_text
+                elif existing_text:
+                    result["output"]["extracted_text"] = existing_text
             all_results["pdf"] = result
     
     try:
+        # Send PROCESSING status for Requirements agent
+        if sse_manager:
+            await sse_manager.send_agent_status(claim_id, "Requirements & Document Validation Agent", "PROCESSING")
+        
         # Re-run requirements validation with new documents
         requirements_result = await agents["requirements"].process(
             all_results.get("image", {}),
@@ -449,6 +622,12 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
         previous_extracted = previous_session.get("extracted_requirements", {})
         newly_extracted = requirements_result.get("output", {}).get("extracted_requirements", {})
         
+        logger.info(f"📋 Merging requirements:")
+        logger.info(f"   Previous fields: {list(previous_extracted.keys())}")
+        logger.info(f"   Newly extracted fields: {list(newly_extracted.keys())}")
+        logger.info(f"   Previous diagnosis: {previous_extracted.get('diagnosis')}")
+        logger.info(f"   New diagnosis: {newly_extracted.get('diagnosis')}")
+        
         # Merge: keep previous values, add new values, prefer new if both exist
         merged_requirements = {}
         for field in ["patient_name", "policy_number", "hospital_name", "diagnosis", 
@@ -456,10 +635,15 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
             # Use new value if present, otherwise use previous value
             if newly_extracted.get(field):
                 merged_requirements[field] = newly_extracted[field]
+                logger.info(f"   ✓ {field}: using NEW value = {newly_extracted[field]}")
             elif previous_extracted.get(field):
                 merged_requirements[field] = previous_extracted[field]
+                logger.info(f"   ✓ {field}: using PREVIOUS value = {previous_extracted[field]}")
             else:
                 merged_requirements[field] = None
+                logger.info(f"   ✗ {field}: MISSING (no value in previous or new)")
+        
+        logger.info(f"📋 Final merged diagnosis: {merged_requirements.get('diagnosis')}")
         
         # Update requirements result with merged data
         requirements_result["output"]["extracted_requirements"] = merged_requirements
@@ -471,6 +655,13 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
         requirements_met = len(missing_fields) == 0
         requirements_result["output"]["requirements_met"] = requirements_met
         requirements_result["output"]["missing_fields"] = missing_fields
+        
+        # Send SSE status for Requirements agent based on result
+        if sse_manager:
+            if requirements_met:
+                await sse_manager.send_agent_status(claim_id, "Requirements & Document Validation Agent", "COMPLETED", requirements_result['confidence'])
+            else:
+                await sse_manager.send_agent_status(claim_id, "Requirements & Document Validation Agent", "WARNING", requirements_result['confidence'])
         
         if not requirements_met:
             # Still missing fields - update session and return HOLD again
@@ -517,7 +708,8 @@ async def resume_claim(files: List[UploadFile] = File(...), claim_id: str = Form
             results=results,
             log_messages=reasoning_log,
             start_time=start_time,
-            log=on_log
+            log=on_log,
+            claim_id=claim_id
         )
         
         elapsed = time.time() - start_time

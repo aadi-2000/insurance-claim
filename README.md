@@ -336,15 +336,29 @@ return {
 
 | Agent | Status | Owner | Key Features |
 |-------|--------|-------|--------------|
-| Image Agent | ✅ FULL | Vivek | OCR + LLM vision, medical document extraction |
-| PDF Agent | ✅ FULL | Swapnil | PyPDF2 text extraction, metadata parsing |
-| Requirements Agent | ✅ FULL | Karthikeyan | LLM JSON extraction, FAISS duplicate detection |
+| Image Agent | ✅ FULL | Vivek | EasyOCR + PyMuPDF for high-quality PDF rendering and OCR |
+| PDF Agent | ✅ FULL | Swapnil | Multi-page PDF processing with OCR fallback |
+| Requirements Agent | ✅ FULL | Karthikeyan | LLM JSON extraction with full document context (no truncation) |
 | Credibility Agent | ✅ FULL | Shruti | Random Forest ML model (91.8% accuracy) |
-| Billing Agent | 🟡 MOCK | Siri | Placeholder implementation |
-| Fraud Agent | ✅ ENHANCED | Titash | RAG-based claim history, duplicate detection, pattern analysis |
-| Orchestrator | ✅ FULL | Aadithya | Weighted fusion, conditional logic, resume handling, claim storage |
+| Billing Agent | ✅ FULL | Siri | LLM-based billing extraction with category breakdown, Indian currency support |
+| Fraud Agent | ✅ FULL | Titash | RAG-based claim history, duplicate detection, pattern analysis |
+| Orchestrator | ✅ FULL | Aadithya | Parallel execution, weighted fusion, conditional logic, resume handling |
 
 ## Recent Updates
+
+### Billing Agent - LLM-Based Extraction (Latest)
+- ✅ **LLM-powered billing extraction**: Uses GPT-4o-mini to extract itemized billing breakdown
+- ✅ **Category-based analysis**: Automatically categorizes charges (room, doctor fees, investigations, medication, consumables, procedures, other)
+- ✅ **Indian currency support**: Correctly parses amounts in Indian number format (e.g., 1,50,895.67)
+- ✅ **Smart total extraction**: Prioritizes "Gross Total" over "Grand Total" for accurate claim amounts
+- ✅ **No document truncation**: Sends full document text to LLM for complete extraction
+- ✅ **File removal UI**: Users can remove individual files or clear all before processing
+
+### Parallel Agent Execution
+- ✅ **True parallel processing**: Credibility, Billing, and Fraud agents run simultaneously using asyncio.gather()
+- ✅ **Visual feedback**: All three agents show "processing" status at the same time in UI
+- ✅ **Faster processing**: Reduced total processing time by running independent agents concurrently
+- ✅ **Orchestrator completion**: Shows green checkmark when done, regardless of approve/reject decision
 
 ### Fraud Categorization & Enhanced UI
 - ✅ **Fraud categorization**: Automatic classification into NONE, SUSPICIOUS, FRAUD, or DUPLICATE_CLAIM
@@ -352,13 +366,7 @@ return {
 - ✅ **Fraud type details**: Specific reasons for fraud detection shown in UI
 - ✅ **Full team names**: All agent owners displayed with complete names
 - ✅ **Color-coded badges**: Visual distinction between fraud types (Green/Orange/Red/Amber)
-
-### Parallel Agent Execution
-- ✅ **Parallel processing**: Credibility, Billing, and Fraud agents run simultaneously
-- ✅ Faster claim processing with async execution
-- ✅ Optimized orchestrator pipeline
-- ✅ Manual approve/reject buttons in UI
-- ✅ Improved error handling for duplicate detection
+- ✅ **Manual controls**: Approve/reject buttons in UI for manual claim decisions
 
 ### RAG-Based Fraud Detection
 - ✅ Claim history database with FAISS vector search

@@ -19,13 +19,13 @@ python-dotenv==1.0.1
 PyPDF2>=3.0.0
 reportlab>=4.0.0
 pdf2image>=1.16.0  # For scanned PDF OCR
-# pymupdf==1.24.0  # Alternative PDF library
+pymupdf>=1.24.0  # For high-quality PDF rendering to images
 # pdfplumber==0.11.0  # Alternative with better table extraction
 
 # OCR & Image Processing (Agent 0a - Image Processing)
 Pillow>=12.0.0
 pytesseract>=0.3.13
-# easyocr==1.7.1  # Optional - for advanced OCR
+easyocr>=1.7.1  # Advanced OCR with better accuracy (from Vivek's notebook)
 
 # ML & Deep Learning (Agent 1 - Requirements, Agent 2 - Credibility)
 numpy>=2.0.0

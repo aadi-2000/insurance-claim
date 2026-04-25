@@ -147,11 +147,7 @@ class PDFProcessingAgent:
             # If no text extracted (scanned PDF), try OCR
             if not extracted_text.strip():
                 logger.info("No text extracted from PDF - attempting OCR on scanned pages")
-                print("\n⚠️ PDF appears to be scanned (no extractable text)")
-                print("🔍 Running OCR on PDF pages...")
                 extracted_text = self.extract_text_from_scanned_pdf(file_bytes)
-                if extracted_text:
-                    print(f"✅ OCR extracted {len(extracted_text)} characters from scanned PDF")
             
             return extracted_text
         except Exception as e:
@@ -223,18 +219,9 @@ class PDFProcessingAgent:
             extracted_text = self.extract_text_from_pdf(file_bytes)
             reasoning.append(f"Extracted {len(extracted_text)} characters from PDF")
             
-            print(f"\n📄 PDF EXTRACTION - {filename}")
-            print(f"  Pages: {metadata.get('num_pages', 0)}")
-            print(f"  Text extracted: {len(extracted_text)} characters")
-            print("\n📝 PDF TEXT CONTENT (first 500 chars):")
-            print("-"*80)
-            print(extracted_text[:500])
-            print("-"*80)
         else:
             reasoning.append("PyPDF2 not available - using fallback mode")
             extracted_text = ""
-            print(f"\n⚠️ PDF EXTRACTION - {filename}")
-            print("  PyPDF2 not available - no text extracted")
         
         # Step 3: Identify sections
         sections = []

@@ -211,16 +211,32 @@ class ClaimHistoryDatabase:
         
         # Search in FAISS index
         k = min(top_k, self.index.ntotal)
+        
+        # If k is 0, return empty list
+        if k == 0:
+            logger.info("No claims to search (k=0)")
+            return []
+        
         distances, indices = self.index.search(embedding_np, k)
         
         # Collect results
         similar_claims = []
+        
+        # Check if results are valid
+        if len(distances) == 0 or len(distances[0]) == 0:
+            logger.info("FAISS search returned empty results")
+            return []
+        
         for i, (distance, idx) in enumerate(zip(distances[0], indices[0])):
             if distance <= distance_threshold:
-                claim_meta = self.claim_metadata[idx].copy()
-                claim_meta["similarity_score"] = float(1.0 / (1.0 + distance))  # Convert distance to similarity
-                claim_meta["distance"] = float(distance)
-                similar_claims.append(claim_meta)
+                # Ensure idx is within bounds
+                if idx < len(self.claim_metadata):
+                    claim_meta = self.claim_metadata[idx].copy()
+                    claim_meta["similarity_score"] = float(1.0 / (1.0 + distance))  # Convert distance to similarity
+                    claim_meta["distance"] = float(distance)
+                    similar_claims.append(claim_meta)
+                else:
+                    logger.warning(f"Index {idx} out of bounds for metadata (size: {len(self.claim_metadata)})")
         
         logger.info(f"Found {len(similar_claims)} similar claims (threshold: {distance_threshold})")
         return similar_claims
@@ -235,23 +251,30 @@ class ClaimHistoryDatabase:
         Returns:
             Tuple of (is_duplicate, duplicate_claim_info)
         """
+        logger.info(f"Checking for duplicates. Current claim data: {claim_data}")
+        
         # Search for very similar claims (strict threshold)
         similar_claims = self.search_similar_claims(
             claim_data, 
             top_k=3, 
-            distance_threshold=0.3  # Very strict threshold for duplicates
+            distance_threshold=0.5  # Threshold for duplicates (lower = stricter)
         )
+        
+        logger.info(f"Found {len(similar_claims)} similar claims within threshold")
         
         if not similar_claims:
             return False, None
         
         # Check for exact matches on key fields
-        for similar_claim in similar_claims:
+        for idx, similar_claim in enumerate(similar_claims):
             similar_data = similar_claim["claim_data"]
+            
+            logger.info(f"Comparing with similar claim #{idx+1}: {similar_data}")
             
             # Check if key fields match
             matches = 0
             total_fields = 0
+            matched_fields = []
             
             key_fields = ["patient_name", "policy_number", "hospital_name", 
                          "diagnosis", "admission_date", "total_claim_amount"]
@@ -264,12 +287,21 @@ class ClaimHistoryDatabase:
                     val2 = str(similar_data[field]).lower().strip()
                     if val1 == val2:
                         matches += 1
+                        matched_fields.append(field)
+                        logger.info(f"  ✓ Field '{field}' matches: '{val1}'")
+                    else:
+                        logger.info(f"  ✗ Field '{field}' differs: '{val1}' vs '{val2}'")
             
-            # If 80%+ of fields match, consider it a duplicate
-            if total_fields > 0 and (matches / total_fields) >= 0.8:
-                logger.warning(f"Potential duplicate claim detected! Match: {matches}/{total_fields} fields")
+            match_percentage = (matches / total_fields * 100) if total_fields > 0 else 0
+            logger.info(f"Match score: {matches}/{total_fields} fields ({match_percentage:.1f}%)")
+            
+            # If 60%+ of fields match, consider it a duplicate
+            if total_fields > 0 and (matches / total_fields) >= 0.6:
+                logger.warning(f"🚨 DUPLICATE CLAIM DETECTED! Match: {matches}/{total_fields} fields ({match_percentage:.1f}%)")
+                logger.warning(f"   Matched fields: {', '.join(matched_fields)}")
                 return True, similar_claim
         
+        logger.info("No duplicate detected")
         return False, None
     
     def get_claim_statistics(self) -> Dict:

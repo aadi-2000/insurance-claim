@@ -16,14 +16,31 @@ class BillingAgent:
         logger.info(f"[{self.AGENT_NAME}] Initialized")
 
     def _parse_amount(self, value) -> float:
+        """Parse amount handling Indian number format (1,50,895.67)"""
         if value is None:
             return 0.0
         if isinstance(value, (int, float)):
             return float(value)
 
-        cleaned = re.sub(r"[^\d.]", "", str(value))
+        # Convert to string and remove currency symbols, spaces
+        value_str = str(value).strip()
+        
+        # Remove currency symbols (₹, Rs, INR, etc.)
+        value_str = re.sub(r'(?i)(rs\.?|inr|₹)\s*', '', value_str)
+        
+        # Remove commas (Indian format uses commas: 1,50,895.67)
+        value_str = value_str.replace(',', '')
+        
+        # Remove any remaining non-digit characters except decimal point
+        value_str = re.sub(r'[^\d.]', '', value_str)
+        
+        # Handle multiple decimal points (keep only the last one)
+        if value_str.count('.') > 1:
+            parts = value_str.split('.')
+            value_str = ''.join(parts[:-1]) + '.' + parts[-1]
+        
         try:
-            return float(cleaned) if cleaned else 0.0
+            return float(value_str) if value_str else 0.0
         except ValueError:
             return 0.0
 
@@ -193,6 +210,23 @@ class BillingAgent:
     def _looks_like_date_or_metadata_amount(self, line: str, amount: float) -> bool:
         lower = line.lower()
 
+        # Skip phone numbers (10 digits, typically > 1 million)
+        if amount >= 1000000000:  # 10-digit numbers (phone numbers)
+            if any(keyword in lower for keyword in ["contact", "phone", "tel", "call", "helpline", "mobile", "number"]):
+                return True
+            # If it's a very large number without currency symbols or billing keywords, likely a phone/reference number
+            if not any(symbol in line for symbol in ["₹", "rs.", "rs ", "inr"]):
+                return True
+        
+        # Skip reference/ID numbers (7-8 digits without decimal points)
+        if 1000000 <= amount <= 99999999 and amount == int(amount):
+            # Check if line contains ID/reference keywords
+            if any(keyword in lower for keyword in ["id", "no.", "no ", "number", "ref", "code", "mrn", "uhid", "ip.no", "ipno"]):
+                return True
+            # If it's a whole number > 1M without currency context, likely an ID
+            if not any(symbol in line for symbol in ["₹", "rs.", "rs ", "inr", "amount", "total", "charges"]):
+                return True
+
         # Skip common years when the line looks like a date/treatment sentence, not a bill row
         if 1900 <= amount <= 2100:
             month_names = [
@@ -225,6 +259,8 @@ class BillingAgent:
             "ward category",
             "tpa / insurer",
             "mode of payment",
+            "emergency contact",
+            "lactation helpline",
         ]
 
         if any(k in lower for k in metadata_keywords):
@@ -293,8 +329,6 @@ class BillingAgent:
             end_idx = len(lines)
 
         table_lines = lines[start_idx:end_idx]
-        print("[BILLING][DEBUG] table mode:", table_mode)
-        print("[BILLING][DEBUG] table line count:", len(table_lines))
 
         i = 0
 
@@ -326,7 +360,6 @@ class BillingAgent:
 
                 if dedupe_key not in seen_entries:
                     seen_entries.add(dedupe_key)
-                    print(f"[BILLING][ROW MATCHED] {category} | amount: {amount} | text: {raw_line}")
                     line_items.append((category, amount, raw_line))
 
                 i += 5
@@ -357,7 +390,6 @@ class BillingAgent:
 
                 if dedupe_key not in seen_entries:
                     seen_entries.add(dedupe_key)
-                    print(f"[BILLING][ROW MATCHED] {category} | amount: {amount} | text: {raw_line}")
                     line_items.append((category, amount, raw_line))
 
                 i += 4
@@ -410,6 +442,11 @@ class BillingAgent:
             amount = self._parse_amount(amount_matches[-1])
             if amount < 10:
                 continue
+            
+            # Skip unreasonably large amounts (likely phone numbers or IDs)
+            # Max reasonable single line item: 10 lakhs (1,000,000)
+            if amount > 1000000:
+                continue
 
             if self._looks_like_date_or_metadata_amount(line, amount):
                 continue
@@ -427,7 +464,6 @@ class BillingAgent:
                 continue
 
             seen_entries.add(dedupe_key)
-            print(f"[BILLING][FALLBACK MATCHED] {category} | amount: {amount} | text: {line}")
             line_items.append((category, amount, line))
 
         return line_items
@@ -435,15 +471,9 @@ class BillingAgent:
     def _extract_line_items(self, text: str) -> List[Tuple[str, float, str]]:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
 
-        print("[BILLING][DEBUG] raw line count:", len(lines))
-        for idx, line in enumerate(lines[:120], 1):
-            print(f"[BILLING][DEBUG] line {idx}: {line}")
-
         line_items = self._extract_table_line_items(lines)
         if line_items:
             return line_items
-
-        print("[BILLING][WARN] No table header found. Falling back to simple line-based parsing.")
         return self._extract_simple_line_items(lines)
 
     def _build_breakdown(self, line_items: List[Tuple[str, float, str]], context: Dict[str, Any]) -> Dict[str, Any]:
@@ -467,17 +497,12 @@ class BillingAgent:
             if final_category == "non_payable":
                 breakdown[final_category]["status"] = "rejected"
                 breakdown[final_category]["reason"] = "Non-medical or non-payable charge"
-                print("[BILLING][FORCED NON-PAYABLE]", raw_line, "->", amount)
             else:
                 breakdown[final_category]["approved"] += amount
 
         total_claim_amount = self._parse_amount(context.get("total_claim_amount"))
 
         for category, entry in breakdown.items():
-            print("[BILLING][CATEGORY CHECK]", category, "claimed=", entry["claimed"])
-            for line in entry["lines"]:
-                print("   [LINE]", line)
-
             claimed = entry["claimed"]
 
             if category == "non_payable":
@@ -543,44 +568,192 @@ class BillingAgent:
                     matches = re.findall(r"(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)", line)
                     if matches:
                         value = self._parse_amount(matches[-1])
-                        print(f"[BILLING][TOTAL SELECTED] {keyword} -> {value}")
                         return value
 
         return 0.0
+    
+    async def _extract_billing_with_llm(self, text: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Use LLM to extract billing breakdown from document text"""
+        if not self.llm_client:
+            return None
+        
+        # Smart truncation: prioritize billing-related sections
+        max_chars = 20000  # Increased limit to capture full billing breakdown
+        if len(text) > max_chars:
+            # Look for billing keywords to find the billing section
+            billing_keywords = ["FINAL BILL", "BILL BREAK", "GROSS AMOUNT", "NET PAYABLE", "PHARMACY", "LAB", "ROOM RENT"]
+            lines = text.split('\n')
+            
+            # Find billing section
+            billing_start = 0
+            for i, line in enumerate(lines):
+                if any(keyword in line.upper() for keyword in billing_keywords):
+                    billing_start = max(0, i - 10)  # Include 10 lines before for context
+                    break
+            
+            # Take from billing section onwards, up to max_chars
+            billing_text = '\n'.join(lines[billing_start:])
+            if len(billing_text) > max_chars:
+                text = billing_text[:max_chars]
+            else:
+                text = billing_text
+        
+        
+        prompt = f"""You are extracting billing information from a medical claim bill. This document contains itemized charges across multiple categories.
+
+Document:
+{text}
+
+Extract ALL billing line items and categorize them into the following JSON format:
+{{
+  "total_claimed": <total gross/net payable amount as number>,
+  "breakdown": {{
+    "room_charges": <sum of all room/bed/ICU charges>,
+    "doctor_fees": <sum of all doctor/consultant fees>,
+    "investigations": <sum of all lab tests, scans, ECG, X-ray charges>,
+    "medication": <sum of all pharmacy/medicine charges>,
+    "consumables": <sum of all consumables, syringes, dressings>,
+    "procedure_charges": <sum of all surgical/procedure/OT charges>,
+    "other": <sum of any other charges not fitting above categories>
+  }}
+}}
+
+IMPORTANT INSTRUCTIONS:
+1. Look through the ENTIRE document for billing line items
+2. Common keywords to look for:
+   - Room: "Room Rent", "Bed Charges", "ICU", "Ward"
+   - Doctor: "Doctor Fee", "Consultant", "Professional Fee"
+   - Investigations: "Lab", "Laboratory", "Pathology", "Radiology", "ECG", "Scan", "X-Ray"
+   - Medication: "Pharmacy", "Medicine", "Drug", "Injection"
+   - Consumables: "Consumables", "Syringe", "Dressing", "Gloves", "Catheter"
+   - Procedure: "Surgery", "OT Charges", "Operation Theatre", "Procedure"
+3. Sum up ALL amounts in each category
+4. The total_claimed should match "Gross Amount" or "Net Payable" or "Total Claim Amount"
+5. Return amounts as numbers only (no ₹, Rs, or commas)
+6. If a category has no charges, use 0
+
+Return ONLY valid JSON, no explanation or markdown."""
+
+        try:
+            response = await self.llm_client.complete_json(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1
+            )
+            
+            result = response.get("parsed")
+            if result:
+                logger.info(f"[BILLING] LLM extraction successful: {result}")
+                return result
+            else:
+                logger.warning("[BILLING] LLM extraction returned no parsed result")
+                return None
+        except Exception as e:
+            logger.error(f"[BILLING] LLM extraction failed: {e}")
+            return None
     
 
     async def process(self, claim_data: Dict) -> Dict[str, Any]:
         start = time.time()
 
         try:
-            print("\n" + "=" * 80)
-            print("[BILLING] START")
-            print("=" * 80)
 
             inputs = self._collect_inputs(claim_data)
             extracted_requirements = inputs["extracted_requirements"]
             combined_text = inputs["combined_text"]
 
-            print("[BILLING][INPUT] claim_data keys:", list(claim_data.keys()))
-            print("[BILLING][INPUT] extracted_requirements:", extracted_requirements)
-            print("[BILLING][INPUT] image_text_length:", len(inputs["image_text"]))
-            print("[BILLING][INPUT] pdf_text_length:", len(inputs["pdf_text"]))
-            print("[BILLING][INPUT] combined_text_length:", len(combined_text))
-            print("[BILLING][INPUT] combined_text_preview:")
-            print(combined_text[:1500])
-            print("[BILLING][DEBUG] combined_text repr:")
-            print(repr(combined_text[:1500]))
 
+            # Try LLM extraction first
+            context = {
+                "total_claim_amount": extracted_requirements.get("total_claim_amount"),
+                "diagnosis": extracted_requirements.get("diagnosis"),
+                "hospital_name": extracted_requirements.get("hospital_name"),
+                "admission_date": extracted_requirements.get("admission_date"),
+                "discharge_date": extracted_requirements.get("discharge_date"),
+            }
+            
+            llm_result = await self._extract_billing_with_llm(combined_text, context) if self.llm_client else None
+            
+            if llm_result and llm_result.get("breakdown"):
+                breakdown = {}
+                for category, amount in llm_result.get("breakdown", {}).items():
+                    if amount > 0:
+                        breakdown[category] = {
+                            "claimed": float(amount),
+                            "approved": float(amount),
+                            "status": "approved",
+                            "reason": "Within expected range",
+                            "lines": [f"LLM extracted {category}: {amount}"]
+                        }
+                
+                # Use declared total from requirements agent (more reliable than LLM extraction from OCR text)
+                declared_total = self._parse_amount(extracted_requirements.get("total_claim_amount"))
+                                
+                parsed_total = sum(item["claimed"] for item in breakdown.values())
+                
+                # Use declared_total as the official claimed amount (from bill's gross total)
+                effective_claimed_total = declared_total
+                
+                # Apply category limits without scaling
+                total_claim_amount = declared_total
+                for category, entry in breakdown.items():
+                    claimed = entry["claimed"]
+                    
+                    if category == "room_charges" and claimed > 50000:
+                        entry["approved"] = min(claimed, 50000)
+                        entry["status"] = "partial"
+                        entry["reason"] = "Room charges exceed default cap"
+                    elif category == "doctor_fees" and total_claim_amount and claimed > (0.15 * total_claim_amount):
+                        entry["approved"] = 0.15 * total_claim_amount
+                        entry["status"] = "partial"
+                        entry["reason"] = "Doctor fees exceed 15% threshold"
+                    elif category == "consumables" and total_claim_amount and claimed > (0.20 * total_claim_amount):
+                        entry["approved"] = 0.20 * total_claim_amount
+                        entry["status"] = "partial"
+                        entry["reason"] = "Consumables exceed 20% threshold"
+                    
+                    entry["approved"] = min(entry["approved"], entry["claimed"])
+                
+                # Calculate approved total from breakdown (no scaling)
+                approved_total = sum(item["approved"] for item in breakdown.values())
+                deductions = effective_claimed_total - approved_total
+                anomaly_score = self._score_anomalies(breakdown, declared_total)
+                
+                billing_summary = {
+                    "line_items_parsed": len(breakdown),
+                    "categories_detected": list(breakdown.keys()),
+                    "non_payable_total": 0.0,
+                    "category_deductions": {},
+                    "deduction_reason_summary": ["LLM-based extraction"],
+                }
+                
+                output = {
+                    "total_claimed": effective_claimed_total,
+                    "total_approved": approved_total,
+                    "breakdown": breakdown,
+                    "anomaly_score": anomaly_score,
+                    "pricing_benchmark": "LLM extraction with rule-based validation",
+                    "deductions": deductions,
+                    "billing_summary": billing_summary,
+                }
+                
+                elapsed = time.time() - start
+                return {
+                    "agent": self.AGENT_NAME,
+                    "owner": self.OWNER,
+                    "status": "success",
+                    "reasoning": [f"LLM extracted billing breakdown with {len(breakdown)} categories"],
+                    "output": output,
+                    "confidence": 0.92,
+                    "processing_time": f"{elapsed:.1f}s",
+                }
+            
+            # Fallback to regex parsing if LLM fails
             line_items = self._extract_line_items(combined_text)
-            print("[BILLING][PARSE] extracted_line_items_count:", len(line_items))
-            for item in line_items:
-                print("[BILLING][PARSE] item:", item)
 
             declared_total_preview = self._parse_amount(extracted_requirements.get("total_claim_amount"))
 
             # Fallback for claim-summary documents with declared total but no itemized bill rows
             if len(line_items) == 0 and declared_total_preview > 0:
-                print("[BILLING][FALLBACK] No itemized billing rows found. Using declared claim amount fallback.")
 
                 billing_summary = {
                     "line_items_parsed": 0,
@@ -602,7 +775,6 @@ class BillingAgent:
                     "deductions": 0.0,
                     "billing_summary": billing_summary,
                 }
-                print("[BILLING][SUMMARY]", output["billing_summary"])
                 reasoning = [
                     "No itemized billing rows were found in the uploaded claim document.",
                     f"Used declared claim amount fallback of INR {declared_total_preview:.2f}.",
@@ -611,9 +783,6 @@ class BillingAgent:
                 ]
 
                 elapsed = time.time() - start
-                print("[BILLING][FINAL OUTPUT]", output)
-                print("[BILLING] END")
-                print("=" * 80 + "\n")
 
                 return {
                     "agent": self.AGENT_NAME,
@@ -639,8 +808,6 @@ class BillingAgent:
             if declared_total == 0:
                 declared_total = self._parse_amount(extracted_requirements.get("total_claim_amount"))
 
-            print("[BILLING][DEBUG] declared_total parsed:", declared_total)
-
             parsed_total = sum(item["claimed"] for item in breakdown.values())
             approved_total_before_clamp = sum(item["approved"] for item in breakdown.values())
 
@@ -652,13 +819,6 @@ class BillingAgent:
 
             deductions = max(effective_claimed_total - approved_total, 0.0)
             anomaly_score = self._score_anomalies(breakdown, declared_total)
-
-            print("[BILLING][TOTALS] declared_total:", declared_total)
-            print("[BILLING][TOTALS] parsed_total:", parsed_total)
-            print("[BILLING][TOTALS] approved_total_before_clamp:", approved_total_before_clamp)
-            print("[BILLING][TOTALS] effective_claimed_total:", effective_claimed_total)
-            print("[BILLING][TOTALS] approved_total_after_clamp:", approved_total)
-            print("[BILLING][TOTALS] deductions:", deductions)
 
             reasoning = []
 
@@ -764,16 +924,6 @@ class BillingAgent:
                 "deductions": deductions,
                 "billing_summary": billing_summary,
             }
-            print("[BILLING][SUMMARY]", output["billing_summary"])
-            print("[BILLING][FINAL OUTPUT]", output)
-            print("[BILLING][OUTPUT] breakdown categories:", list(breakdown.keys()))
-            print("[BILLING][OUTPUT] breakdown:", breakdown)
-            print("[BILLING][OUTPUT] total_claimed:", output["total_claimed"])
-            print("[BILLING][OUTPUT] total_approved:", output["total_approved"])
-            print("[BILLING][OUTPUT] deductions:", output["deductions"])
-            print("[BILLING][OUTPUT] anomaly_score:", output["anomaly_score"])
-            print("[BILLING] END")
-            print("=" * 80 + "\n")
 
             await asyncio.sleep(0.1)
 
@@ -801,12 +951,6 @@ class BillingAgent:
 
             confidence = max(0.85, min(confidence, 0.98))
 
-            print("[CONF DEBUG] anomaly:", anomaly_score)
-            print("[CONF DEBUG] base_conf:", base_conf)
-            print("[CONF DEBUG] line_score:", line_score)
-            print("[CONF DEBUG] category_score:", category_score)
-            print("[CONF DEBUG] consistency_score:", consistency_score)
-            print("[CONF DEBUG] FINAL:", confidence)
 
             return {
                 "agent": self.AGENT_NAME,
@@ -820,7 +964,6 @@ class BillingAgent:
 
         except Exception as e:
             elapsed = time.time() - start
-            print("[BILLING][ERROR]", repr(e))
             logger.exception(f"[{self.AGENT_NAME}] Failed")
 
             return {

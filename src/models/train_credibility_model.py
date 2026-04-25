@@ -192,11 +192,6 @@ def train_model(df: pd.DataFrame) -> dict:
         X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y
     )
 
-    print(f"Training set: {X_train.shape[0]} samples")
-    print(f"Test set:     {X_test.shape[0]} samples")
-    print(f"Features:     {X_train.shape[1]}")
-    print(f"Classes:      {np.unique(y_train)}")
-    print()
 
     # Hyperparameter grid search
     param_grid = {
@@ -207,7 +202,6 @@ def train_model(df: pd.DataFrame) -> dict:
         "class_weight": ["balanced", "balanced_subsample"],
     }
 
-    print("Running GridSearchCV (5-fold)...")
     base_rf = RandomForestClassifier(random_state=RANDOM_STATE, n_jobs=-1)
     grid_search = GridSearchCV(
         base_rf, param_grid,
@@ -219,9 +213,6 @@ def train_model(df: pd.DataFrame) -> dict:
 
     best_model = grid_search.best_estimator_
     best_params = grid_search.best_params_
-    print(f"Best params: {best_params}")
-    print(f"Best CV accuracy: {grid_search.best_score_:.4f}")
-    print()
 
     # Evaluate on test set
     y_pred = best_model.predict(X_test)
@@ -236,24 +227,10 @@ def train_model(df: pd.DataFrame) -> dict:
     except ValueError:
         auc = 0.0
 
-    print("=" * 60)
-    print("TEST SET EVALUATION")
-    print("=" * 60)
-    print(f"Accuracy:  {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall:    {recall:.4f}")
-    print(f"F1 Score:  {f1:.4f}")
-    print(f"AUC (OVR): {auc:.4f}")
-    print()
 
-    print("Classification Report:")
     target_names = [LABEL_MAP[i] for i in sorted(LABEL_MAP.keys())]
-    print(classification_report(y_test, y_pred, target_names=target_names))
 
-    print("Confusion Matrix:")
     cm = confusion_matrix(y_test, y_pred)
-    print(pd.DataFrame(cm, index=target_names, columns=target_names))
-    print()
 
     # Feature importances
     importances = best_model.feature_importances_
@@ -262,15 +239,11 @@ def train_model(df: pd.DataFrame) -> dict:
         "importance": importances,
     }).sort_values("importance", ascending=False)
 
-    print("Feature Importances:")
     for _, row in importance_df.iterrows():
         bar = "█" * int(row["importance"] * 50)
-        print(f"  {row['feature']:30s} {row['importance']:.4f} {bar}")
-    print()
 
     # Cross-validation score on full dataset
     cv_scores = cross_val_score(best_model, X, y, cv=5, scoring="accuracy")
-    print(f"5-Fold CV Accuracy: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
 
     metrics = {
         "accuracy": round(accuracy, 4),
@@ -304,7 +277,6 @@ def save_artifacts(result: dict, model_dir: Path) -> None:
     # Save model
     model_path = model_dir / "credibility_rf_model.joblib"
     joblib.dump(result["model"], model_path)
-    print(f"Model saved: {model_path}")
 
     # Save metadata
     metadata = {
@@ -323,7 +295,6 @@ def save_artifacts(result: dict, model_dir: Path) -> None:
     metadata_path = model_dir / "credibility_model_metadata.json"
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=2)
-    print(f"Metadata saved: {metadata_path}")
 
 
 # ============================================================
@@ -331,28 +302,15 @@ def save_artifacts(result: dict, model_dir: Path) -> None:
 # ============================================================
 
 def main():
-    print("=" * 60)
-    print("CREDIBILITY MODEL TRAINING PIPELINE")
-    print("=" * 60)
-    print()
 
     # Step 1: Generate data
-    print("[1/3] Generating synthetic training data...")
     df = generate_synthetic_data(N_SAMPLES)
-    print(f"Generated {len(df)} samples")
-    print(f"Label distribution:\n{df['label'].value_counts().sort_index()}")
-    print()
 
     # Step 2: Train model
-    print("[2/3] Training Random Forest model...")
     result = train_model(df)
-    print()
 
     # Step 3: Save
-    print("[3/3] Saving artifacts...")
     save_artifacts(result, MODEL_DIR)
-    print()
-    print("Done!")
 
 
 if __name__ == "__main__":

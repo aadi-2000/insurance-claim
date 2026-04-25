@@ -124,9 +124,15 @@ class RequirementsAgent:
 
     async def extract_requirements_json(self, document_text: str) -> dict:
         """Extract insurance claim fields using LLM with JSON output"""
+        logger.info(f"🤖 [Requirements Agent] Starting LLM extraction")
+        logger.info(f"   Document text length: {len(document_text)} chars")
+        
         if not self.llm_client:
-            logger.warning("LLM client not configured, using fallback extraction")
+            logger.warning("⚠️ LLM client not configured, using fallback extraction")
             return self._fallback_extraction(document_text)
+        
+        # No truncation - send full document to LLM
+        logger.info(f"   Sending full document ({len(document_text)} chars) to LLM")
         
         prompt = f"""You are extracting insurance claim fields from a medical discharge summary OCR text.
 
@@ -155,12 +161,14 @@ FIELD EXTRACTION RULES:
 
 6. **discharge_date**: Look for "Date o Discharge" or "Date of Discharge"
 
-7. **total_claim_amount**: Look for:
-   - "Gross Total Rs:" followed by amount (most common in hospital bills)
-   - "Total Amount", "Claim Amount" with currency
-   - Any amount with INR/Rs/₹ symbols
+7. **total_claim_amount**: Look for the HIGHEST billing amount in this priority order:
+   - "Gross Total" or "Gross Amount" (this is the main claim amount before deductions)
+   - "Total Amount" or "Total Claim Amount"
+   - "Net Payable" or "Amount Payable"
+   - DO NOT use "Grand Total" if a higher "Gross Total" exists
    - Extract ONLY the numeric value (remove currency symbols, keep commas/decimals)
-   - Example: "Gross Total Rs: 45,000.00" → extract "45000.00" or "45000"
+   - Example: "Gross Total Rs: 1,50,895.67" → extract "150895.67"
+   - If you see both "Gross Total: 150895.67" and "Grand Total: 23634.51", use the Gross Total (150895.67)
 
 CRITICAL: 
 - Extract the actual name even if the label is garbled.
@@ -199,31 +207,44 @@ JSON Output:
 """
         
         try:
+            logger.info(f"🤖 Calling LLM for field extraction...")
             # Use LLM client to generate response (async)
             response = await self.llm_client.complete(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=512
             )
-            raw_output = response.get("content", "")
             
-            print(f"\n🤖 LLM RAW RESPONSE:")
-            print("-"*80)
-            print(raw_output[:500])
-            print("-"*80)
-            
-            # Extract JSON block using regex
-            json_match = re.search(r"```json\n(.*?)```", raw_output, re.DOTALL)
-            if json_match:
-                cleaned_output = json_match.group(1).strip()
+            # Extract text from response (handle both dict and string)
+            if isinstance(response, dict):
+                response_text = response.get("content", "") or response.get("text", "") or str(response)
             else:
-                cleaned_output = raw_output.replace('```json', '').replace('```', '').strip()
+                response_text = str(response)
+            
+            logger.info(f"✅ LLM response received ({len(response_text)} chars)")
+            
+            # Parse JSON from response
+            response_text = response_text.strip()
+            
+            # Try to extract JSON if wrapped in markdown
+            if "```json" in response_text:
+                json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group(1)
+            elif "```" in response_text:
+                json_match = re.search(r'```\s*(.*?)\s*```', response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group(1)
+            
+            extracted = json.loads(response_text)
+            logger.info(f"📋 Extracted fields from LLM:")
+            for field, value in extracted.items():
+                if value:
+                    logger.info(f"   ✓ {field}: {value}")
+                else:
+                    logger.info(f"   ✗ {field}: (empty)")
             
             # Parse and validate
-            parsed_dict = json.loads(cleaned_output)
-            
-            print(f"\n✅ LLM EXTRACTED FIELDS:")
-            for k, v in parsed_dict.items():
-                print(f"  {k}: {v}")
+            parsed_dict = json.loads(response_text)
             
             if PYDANTIC_AVAILABLE:
                 validated_data = InsuranceClaim(**parsed_dict)
@@ -232,7 +253,8 @@ JSON Output:
                 return parsed_dict
                 
         except Exception as e:
-            logger.warning(f"LLM extraction failed: {e}, using fallback")
+            logger.error(f"❌ LLM extraction failed: {type(e).__name__}: {e}")
+            logger.warning(f"⚠️ Falling back to regex-based extraction")
             return self._fallback_extraction(document_text)
 
     def _fallback_extraction(self, document_text: str) -> dict:
@@ -349,25 +371,13 @@ JSON Output:
         if pdf_data and "output" in pdf_data and "extracted_text" in pdf_data["output"]:
             pdf_text = pdf_data["output"]["extracted_text"]
             document_text += pdf_text
-            print(f"\n📄 PDF OCR TEXT ({len(pdf_text)} chars):")
-            print("-"*80)
-            print(pdf_text[:500])
-            print("-"*80)
         if image_data and "output" in image_data and "extracted_text" in image_data["output"]:
             image_text = image_data["output"]["extracted_text"]
             document_text += "\n" + image_text
-            print(f"\n🖼️ IMAGE OCR TEXT ({len(image_text)} chars):")
-            print("-"*80)
-            print(image_text[:500])
-            print("-"*80)
         
         if not document_text:
             document_text = "Sample claim document"  # Fallback for testing
         
-        print(f"\n📋 COMBINED TEXT FOR EXTRACTION ({len(document_text)} chars):")
-        print("-"*80)
-        print(document_text[:500])
-        print("-"*80)
         
         reasoning.append("Starting LLM-based JSON extraction")
         
@@ -406,11 +416,6 @@ JSON Output:
         completeness_score = 1.0 - (len(missing_fields) / len(REQUIRED_FIELDS))
         
         requirements_met = len(missing_fields) == 0
-
-        print("[REQUIREMENTS] extracted_requirements:", extracted_dict)
-        print("[REQUIREMENTS] missing_fields:", missing_fields)
-        print("[REQUIREMENTS] requirements_met:", requirements_met)
-        print("[REQUIREMENTS] completeness_score:", completeness_score)
 
         output = {
             "requirements_met": requirements_met,

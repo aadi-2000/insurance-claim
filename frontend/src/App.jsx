@@ -1,6 +1,16 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const API_BASE = "/api";
+
+// Add CSS animations
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+`;
+document.head.appendChild(style);
 
 // ============================================================
 // UI COMPONENTS
@@ -68,6 +78,109 @@ const ProgressBar = ({ progress, label }) => (
   </div>
 );
 
+const AgentGraph = ({ agents, currentAgent, parallelAgents = [], decision, agentStatuses = {} }) => {
+  console.log("[AgentGraph] Rendering with agentStatuses:", agentStatuses);
+  
+  const getNodeColor = (agentKey) => {
+    const status = agentStatuses?.[agentKey];
+    const color = status === "completed" ? "#10b981" :  // Green
+                  status === "processing" ? "#f59e0b" :  // Orange
+                  status === "warning" ? "#eab308" :     // Yellow (for warnings/SUSPICIOUS)
+                  status === "failed" ? "#ef4444" :      // Red
+                  status === "rejected" ? "#ef4444" :    // Red
+                  status === "skipped" ? "#6366f1" :     // Indigo/Purple (distinct from default)
+                  "#475569";                              // Default gray
+    console.log(`[AgentGraph] ${agentKey} status: ${status}, color: ${color}`);
+    return color;
+  };
+
+  const isBlinking = (agentKey) => {
+    const status = agentStatuses?.[agentKey];
+    const blinking = status === "processing"; // Only blink during processing
+    console.log(`[AgentGraph] ${agentKey} isBlinking: ${blinking} (status: ${status})`);
+    return blinking;
+  };
+
+  return (
+    <div style={{ padding: "32px 20px", background: "rgba(15,23,42,0.5)", borderRadius: 16, border: "1px solid rgba(148,163,184,0.1)" }}>
+      {/* Graph Layout */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 24, alignItems: "center" }}>
+        {/* Row 1: Image & PDF */}
+        <div style={{ display: "flex", gap: 40, alignItems: "center" }}>
+          <AgentNode agent={agents[0]} color={getNodeColor("image")} isBlinking={isBlinking("image")} status={agentStatuses?.image} />
+          <AgentNode agent={agents[1]} color={getNodeColor("pdf")} isBlinking={isBlinking("pdf")} status={agentStatuses?.pdf} />
+        </div>
+        
+        {/* Arrow down */}
+        <div style={{ color: "#475569", fontSize: 24 }}>↓</div>
+        
+        {/* Row 2: Requirements */}
+        <AgentNode agent={agents[2]} color={getNodeColor("requirements")} isBlinking={isBlinking("requirements")} status={agentStatuses?.requirements} />
+        
+        {/* Arrow down with split */}
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <div style={{ color: "#475569", fontSize: 24 }}>↓</div>
+          <div style={{ color: "#475569", fontSize: 12, fontFamily: "mono" }}>parallel</div>
+        </div>
+        
+        {/* Row 3: Parallel Agents (Credibility, Billing, Fraud) */}
+        <div style={{ display: "flex", gap: 40, alignItems: "center" }}>
+          <AgentNode agent={agents[3]} color={getNodeColor("credibility")} isBlinking={isBlinking("credibility")} status={agentStatuses?.credibility} />
+          <AgentNode agent={agents[4]} color={getNodeColor("billing")} isBlinking={isBlinking("billing")} status={agentStatuses?.billing} />
+          <AgentNode agent={agents[5]} color={getNodeColor("fraud")} isBlinking={isBlinking("fraud")} status={agentStatuses?.fraud} />
+        </div>
+        
+        {/* Arrow down */}
+        <div style={{ color: "#475569", fontSize: 24 }}>↓</div>
+        
+        {/* Row 4: Orchestrator */}
+        <AgentNode agent={agents[6]} color={getNodeColor("orchestrator")} isBlinking={isBlinking("orchestrator")} status={agentStatuses?.orchestrator} />
+      </div>
+    </div>
+  );
+};
+
+const AgentNode = ({ agent, color, isBlinking, status }) => (
+  <div style={{
+    background: `${color}22`,
+    border: `2px solid ${color}`,
+    borderRadius: 16,
+    padding: "16px 20px",
+    minWidth: 140,
+    textAlign: "center",
+    position: "relative",
+    animation: isBlinking ? "agentBlink 1.5s infinite" : "none",
+    boxShadow: isBlinking ? `0 0 20px ${color}66` : "none",
+  }}>
+    <div style={{ fontSize: 28, marginBottom: 8 }}>{agent.icon}</div>
+    <div style={{ color: "#e2e8f0", fontSize: 12, fontWeight: 600, fontFamily: "mono", marginBottom: 4 }}>{agent.name}</div>
+    <div style={{ color: "#64748b", fontSize: 10 }}>{agent.owner}</div>
+    {status && (
+      <div style={{
+        position: "absolute",
+        top: -8,
+        right: -8,
+        width: 20,
+        height: 20,
+        borderRadius: "50%",
+        background: color,
+        border: "2px solid #0f172a",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 10,
+        animation: status === "processing" ? "spin 1s linear infinite" : "none",
+      }}>
+        {status === "processing" ? "⟳" :
+         status === "completed" ? "✓" : 
+         status === "warning" ? "⚠" :
+         status === "failed" || status === "rejected" ? "✗" : 
+         status === "skipped" ? "⊘" : ""}
+      </div>
+    )}
+  </div>
+);
+
 // ============================================================
 // MAIN APP
 // ============================================================
@@ -80,16 +193,19 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("pipeline");
   const [dragActive, setDragActive] = useState(false);
   const [backendStatus, setBackendStatus] = useState(null);
+  const [agentStatuses, setAgentStatuses] = useState({});
+  const [parallelAgents, setParallelAgents] = useState([]);
+  const [currentClaimId, setCurrentClaimId] = useState(null); // Store claim_id for resume
   const fileInputRef = useRef(null);
 
   const agentPipeline = [
-    { key: "image", name: "Image Processing", icon: "🖼️", owner: "Vivek Vardhan" },
-    { key: "pdf", name: "PDF Extraction", icon: "📄", owner: "Swapnil Sontakke" },
-    { key: "requirements", name: "Requirements Check", icon: "📋", owner: "Karthikeyan Pillai" },
-    { key: "credibility", name: "Credibility & Policy", icon: "🔍", owner: "Shruti Roy" },
-    { key: "billing", name: "Billing Analysis", icon: "💰", owner: "Siri Spandana" },
-    { key: "fraud", name: "Fraud Detection", icon: "🛡️", owner: "Titash Bhattacharya" },
-    { key: "orchestrator", name: "Orchestrator", icon: "🎯", owner: "Aadithya Pabbisetty" },
+    { key: "image", name: "Image Processing", icon: "🖼️", owner: "Vivek Vardhan", status: agentStatuses.image },
+    { key: "pdf", name: "PDF Extraction", icon: "📄", owner: "Swapnil Sontakke", status: agentStatuses.pdf },
+    { key: "requirements", name: "Requirements Check", icon: "📋", owner: "Karthikeyan Pillai", status: agentStatuses.requirements },
+    { key: "credibility", name: "Credibility & Policy", icon: "🔍", owner: "Shruti Roy", status: agentStatuses.credibility },
+    { key: "billing", name: "Billing Analysis", icon: "💰", owner: "Siri Spandana", status: agentStatuses.billing },
+    { key: "fraud", name: "Fraud Detection", icon: "🛡️", owner: "Titash Bhattacharya", status: agentStatuses.fraud },
+    { key: "orchestrator", name: "Orchestrator", icon: "🎯", owner: "Aadithya Pabbisetty", status: agentStatuses.orchestrator },
   ];
 
   const handleFiles = (newFiles) => setFiles((prev) => [...prev, ...Array.from(newFiles)]);
@@ -99,10 +215,87 @@ export default function App() {
     setStage("processing");
     setProgress(10);
     setProcessingStatus("Uploading additional documents...");
+    setAgentStatuses({}); // Clear previous agent statuses
+    setParallelAgents([]); // Clear parallel agents
 
     const formData = new FormData();
     additionalFiles.forEach((f) => formData.append("files", f));
     formData.append("claim_id", claimId);
+
+    // Connect to SSE for real-time updates
+    console.log(`[Frontend] Connecting to SSE stream for resume: /api/process-claim-stream/${claimId}`);
+    const eventSource = new EventSource(`${API_BASE}/process-claim-stream/${claimId}`);
+    
+    eventSource.onopen = (event) => {
+      console.log(`[Frontend] ✓ SSE connection opened for resume claim ${claimId}`, event);
+    };
+
+    eventSource.onmessage = (event) => {
+      console.log(`[Frontend] 📨 RAW SSE event (resume):`, event);
+      const update = JSON.parse(event.data);
+      console.log(`[Frontend] 📨 SSE Update parsed (resume):`, update);
+      
+      if (update.type === "agent_status") {
+        const { agent, status, confidence } = update.data;
+        const agentKey = agent.toLowerCase().includes("image") ? "image" :
+                        agent.toLowerCase().includes("pdf") ? "pdf" :
+                        agent.toLowerCase().includes("requirement") ? "requirements" :
+                        agent.toLowerCase().includes("credibility") ? "credibility" :
+                        agent.toLowerCase().includes("billing") ? "billing" :
+                        agent.toLowerCase().includes("fraud") ? "fraud" :
+                        agent.toLowerCase().includes("orchestrator") ? "orchestrator" : null;
+        
+        if (agentKey) {
+          const statusLower = status.toLowerCase();
+          console.log(`[Frontend] Setting ${agentKey} status to: ${statusLower}, confidence/category: ${confidence}`);
+          
+          // Special handling for fraud agent - check fraud category
+          let finalStatus = statusLower;
+          if (agentKey === "fraud" && statusLower === "completed" && confidence) {
+            const fraudCategory = confidence;
+            if (fraudCategory === "DUPLICATE_CLAIM" || fraudCategory === "FRAUD") {
+              finalStatus = "rejected";
+              console.log(`[Frontend] Fraud agent detected ${fraudCategory}, setting status to rejected`);
+            } else if (fraudCategory === "SUSPICIOUS") {
+              finalStatus = "warning";
+              console.log(`[Frontend] Fraud agent detected SUSPICIOUS, setting status to warning`);
+            }
+          }
+          
+          setAgentStatuses(prev => {
+            const newStatuses = {
+              ...prev,
+              [agentKey]: finalStatus
+            };
+            console.log(`[Frontend] Updated agentStatuses:`, newStatuses);
+            return newStatuses;
+          });
+          
+          // Update processing status message
+          if (statusLower === "processing") {
+            setProcessingStatus(`⏳ ${agent} is processing...`);
+          } else if (statusLower === "completed") {
+            setProcessingStatus(`✓ ${agent} completed`);
+          } else if (statusLower === "warning") {
+            setProcessingStatus(`⚠ ${agent} - action required`);
+          } else if (statusLower === "skipped") {
+            setProcessingStatus(`⊘ ${agent} skipped`);
+          }
+        }
+      } else if (update.type === "complete") {
+        eventSource.close();
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error(`[Frontend] ❌ SSE Error for resume claim ${claimId}:`, error);
+      eventSource.close();
+    };
+
+    // Wait for SSE connection to be established
+    console.log(`[Frontend] Waiting 1s for SSE connection to establish...`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log(`[Frontend] Starting resume claim API call...`);
 
     const progressInterval = setInterval(() => {
       setProgress((p) => Math.min(p + 2, 85));
@@ -111,6 +304,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/resume-claim`, { method: "POST", body: formData });
       clearInterval(progressInterval);
+      eventSource.close();
 
       if (!res.ok) {
         const err = await res.json();
@@ -139,6 +333,52 @@ export default function App() {
         setStage("results"); // Stay on results page
       } else {
         // Requirements met, processing completed
+        // Set final agent statuses based on backend response
+        const isRejected = data.result?.decision === "REJECT";
+        const fraudCategory = data.result?.claim_summary?.fraud_category;
+        
+        setAgentStatuses(prev => {
+          const finalStatuses = { ...prev };
+          
+          if (data.result?.agent_summaries) {
+            data.result.agent_summaries.forEach(summary => {
+              const agentKey = summary.agent.toLowerCase().includes("image") ? "image" :
+                              summary.agent.toLowerCase().includes("pdf") ? "pdf" :
+                              summary.agent.toLowerCase().includes("requirement") ? "requirements" :
+                              summary.agent.toLowerCase().includes("credibility") ? "credibility" :
+                              summary.agent.toLowerCase().includes("billing") ? "billing" :
+                              summary.agent.toLowerCase().includes("fraud") ? "fraud" :
+                              summary.agent.toLowerCase().includes("orchestrator") ? "orchestrator" : null;
+              
+              if (agentKey) {
+                let status = summary.status === "COMPLETED" ? "completed" :
+                            summary.status === "FAILED" ? "failed" :
+                            summary.status === "SKIPPED" ? "skipped" : 
+                            summary.status === "PASS" ? "completed" : "completed";
+                
+                if (agentKey === "fraud" && isRejected && (fraudCategory === "DUPLICATE_CLAIM" || fraudCategory === "FRAUD")) {
+                  status = "rejected";
+                  finalStatuses[agentKey] = status;
+                } else if (agentKey === "fraud" && fraudCategory === "SUSPICIOUS") {
+                  status = "warning";
+                  finalStatuses[agentKey] = status;
+                } else if (isRejected && summary.status === "FAILED") {
+                  status = "rejected";
+                  finalStatuses[agentKey] = status;
+                } else if (!prev[agentKey]) {
+                  finalStatuses[agentKey] = status;
+                }
+              }
+            });
+          }
+          
+          if (!finalStatuses.orchestrator) {
+            finalStatuses.orchestrator = "completed";
+          }
+          
+          return finalStatuses;
+        });
+        
         setResult(data.result);
         setProgress(100);
         setProcessingStatus(""); // Clear status message
@@ -146,6 +386,7 @@ export default function App() {
       }
     } catch (e) {
       clearInterval(progressInterval);
+      eventSource.close();
       setProcessingStatus(`Error: ${e.message}`);
       setProgress(0);
     }
@@ -155,36 +396,108 @@ export default function App() {
     setStage("processing");
     setProgress(10);
     setProcessingStatus("Uploading files and starting agent pipeline...");
+    setAgentStatuses({});
+    setParallelAgents([]);
+
+    // Generate claim ID for SSE tracking
+    const claimId = `claim_${Date.now()}`;
+    setCurrentClaimId(claimId); // Store for potential resume
+    console.log(`[Frontend] Generated claim_id: ${claimId}`);
 
     const formData = new FormData();
     files.forEach((f) => formData.append("files", f));
+    formData.append("claim_id", claimId); // Send claim_id to backend
 
-    // More conservative progress simulation - slower increments
-    const progressInterval = setInterval(() => {
-      setProgress((p) => Math.min(p + 2, 85)); // Cap at 85% until backend responds
-    }, 800);
+    // Connect to SSE for real-time updates
+    console.log(`[Frontend] Connecting to SSE stream: /api/process-claim-stream/${claimId}`);
+    const eventSource = new EventSource(`${API_BASE}/process-claim-stream/${claimId}`);
+    
+    eventSource.onopen = (event) => {
+      console.log(`[Frontend] ✓ SSE connection opened for claim ${claimId}`, event);
+      console.log(`[Frontend] SSE readyState:`, eventSource.readyState); // 0=CONNECTING, 1=OPEN, 2=CLOSED
+    };
 
-    const steps = [
-      "Image Processing Agent analyzing documents...",
-      "PDF Processing Agent extracting text...",
-      "Requirements Agent validating documents...",
-      "Checking for missing fields...",
-    ];
-    let stepIdx = 0;
-    const statusInterval = setInterval(() => {
-      if (stepIdx < steps.length) {
-        setProcessingStatus(steps[stepIdx]);
-        stepIdx++;
-      } else {
-        // After initial steps, show waiting message
-        setProcessingStatus("Waiting for backend processing...");
+    eventSource.onmessage = (event) => {
+      console.log(`[Frontend] 📨 RAW SSE event:`, event);
+      const update = JSON.parse(event.data);
+      console.log(`[Frontend] 📨 SSE Update parsed:`, update);
+      
+      if (update.type === "agent_status") {
+        const { agent, status, confidence } = update.data;
+        const agentKey = agent.toLowerCase().includes("image") ? "image" :
+                        agent.toLowerCase().includes("pdf") ? "pdf" :
+                        agent.toLowerCase().includes("requirement") ? "requirements" :
+                        agent.toLowerCase().includes("credibility") ? "credibility" :
+                        agent.toLowerCase().includes("billing") ? "billing" :
+                        agent.toLowerCase().includes("fraud") ? "fraud" :
+                        agent.toLowerCase().includes("orchestrator") ? "orchestrator" : null;
+        
+        if (agentKey) {
+          const statusLower = status.toLowerCase();
+          console.log(`[Frontend] Setting ${agentKey} status to: ${statusLower}, confidence/category: ${confidence}`);
+          
+          // Special handling for fraud agent - check fraud category
+          let finalStatus = statusLower;
+          if (agentKey === "fraud" && statusLower === "completed" && confidence) {
+            const fraudCategory = confidence; // confidence field contains fraud_category for fraud agent
+            if (fraudCategory === "DUPLICATE_CLAIM" || fraudCategory === "FRAUD") {
+              finalStatus = "rejected";
+              console.log(`[Frontend] Fraud agent detected ${fraudCategory}, setting status to rejected`);
+            } else if (fraudCategory === "SUSPICIOUS") {
+              finalStatus = "warning";
+              console.log(`[Frontend] Fraud agent detected SUSPICIOUS, setting status to warning`);
+            }
+          }
+          
+          setAgentStatuses(prev => {
+            const newStatuses = {
+              ...prev,
+              [agentKey]: finalStatus
+            };
+            console.log(`[Frontend] Updated agentStatuses:`, newStatuses);
+            return newStatuses;
+          });
+          
+          // Update processing status message
+          if (statusLower === "processing") {
+            setProcessingStatus(`⏳ ${agent} is processing...`);
+          } else if (statusLower === "completed") {
+            setProcessingStatus(`✓ ${agent} completed`);
+          } else if (statusLower === "warning") {
+            setProcessingStatus(`⚠ ${agent} - action required`);
+          } else if (statusLower === "skipped") {
+            setProcessingStatus(`⊘ ${agent} skipped`);
+          }
+        } else {
+          console.log(`[Frontend] ⚠️ Could not map agent name: ${agent}`);
+        }
+      } else if (update.type === "complete") {
+        eventSource.close();
       }
-    }, 2000);
+    };
+
+    eventSource.onerror = (error) => {
+      console.error(`[Frontend] ❌ SSE Error for claim ${claimId}:`, error);
+      console.error(`[Frontend] SSE readyState:`, eventSource.readyState);
+      eventSource.close();
+    };
+
+    // Wait for SSE connection to be established before starting processing
+    console.log(`[Frontend] Waiting 1s for SSE connection to establish...`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    console.log(`[Frontend] Starting claim processing API call...`);
+
+    // Simple progress indicator
+    const progressInterval = setInterval(() => {
+      setProgress((p) => Math.min(p + 1, 90));
+    }, 1000);
+
+    setProcessingStatus("Processing claim through agent pipeline...");
 
     try {
       const res = await fetch(`${API_BASE}/process-claim`, { method: "POST", body: formData });
       clearInterval(progressInterval);
-      clearInterval(statusInterval);
+      eventSource.close();
 
       if (!res.ok) {
         const err = await res.json();
@@ -192,23 +505,94 @@ export default function App() {
       }
 
       const data = await res.json();
+      
+      // Set final agent statuses based on backend response
+      // Only update statuses that weren't already set by SSE
+      const isRejected = data.result?.decision === "REJECT";
+      const fraudCategory = data.result?.claim_summary?.fraud_category;
+      
+      // Debug logging
+      console.log("Decision:", data.result?.decision);
+      console.log("Fraud Category:", fraudCategory);
+      console.log("Is Rejected:", isRejected);
+      console.log("Agent Summaries:", data.result?.agent_summaries);
+      
+      setAgentStatuses(prev => {
+        const finalStatuses = { ...prev }; // Start with existing SSE statuses
+        
+        if (data.result?.agent_summaries) {
+          data.result.agent_summaries.forEach(summary => {
+            const agentKey = summary.agent.toLowerCase().includes("image") ? "image" :
+                            summary.agent.toLowerCase().includes("pdf") ? "pdf" :
+                            summary.agent.toLowerCase().includes("requirement") ? "requirements" :
+                            summary.agent.toLowerCase().includes("credibility") ? "credibility" :
+                            summary.agent.toLowerCase().includes("billing") ? "billing" :
+                            summary.agent.toLowerCase().includes("fraud") ? "fraud" :
+                            summary.agent.toLowerCase().includes("orchestrator") ? "orchestrator" : null;
+            
+            if (agentKey) {
+              // Map backend status to frontend status
+              let status = summary.status === "COMPLETED" ? "completed" :
+                          summary.status === "FAILED" ? "failed" :
+                          summary.status === "SKIPPED" ? "skipped" : 
+                          summary.status === "PASS" ? "completed" : "completed";
+              
+              // Special case: If fraud detected duplicate/fraud and claim rejected, mark fraud agent as rejected (red)
+              if (agentKey === "fraud" && isRejected && (fraudCategory === "DUPLICATE_CLAIM" || fraudCategory === "FRAUD")) {
+                status = "rejected";
+                finalStatuses[agentKey] = status; // Always set rejected status for fraud
+              }
+              // If fraud is SUSPICIOUS, mark as warning (orange) for review
+              else if (agentKey === "fraud" && fraudCategory === "SUSPICIOUS") {
+                status = "warning";
+                finalStatuses[agentKey] = status; // Set warning status for suspicious
+              }
+              // If claim is rejected and agent failed, mark as rejected (red)
+              else if (isRejected && summary.status === "FAILED") {
+                status = "rejected";
+                finalStatuses[agentKey] = status; // Always set rejected status
+              }
+              // Only set if not already set by SSE (don't overwrite real-time updates)
+              else if (!prev[agentKey]) {
+                finalStatuses[agentKey] = status;
+              }
+            }
+          });
+        }
+        
+        // Orchestrator always completes when we have results
+        if (!finalStatuses.orchestrator) {
+          finalStatuses.orchestrator = "completed";
+        }
+        
+        console.log("[Frontend] Final merged statuses:", finalStatuses);
+        return finalStatuses;
+      });
+      setParallelAgents([]);
       setResult(data.result);
       setProgress(100);
       setProcessingStatus(""); // Clear the waiting message
       setStage("results");
     } catch (e) {
       clearInterval(progressInterval);
-      clearInterval(statusInterval);
       setProcessingStatus(`Error: ${e.message}. Make sure the backend is running on port 8000.`);
       setProgress(0);
+      setAgentStatuses({}); // Clear any simulated statuses
+      setParallelAgents([]);
     }
   };
 
-  const decisionColors = { APPROVE: "#10b981", REJECT: "#ef4444", REVIEW: "#f59e0b", HOLD: "#8b5cf6" };
+  const decisionColors = {
+    APPROVE: "#10b981",
+    REJECT: "#ef4444",
+    REVIEW: "#f59e0b",
+    HOLD: "#f59e0b",
+  };
 
   const resetApp = () => {
     setStage("upload"); setFiles([]); setResult(null);
     setProgress(0); setActiveTab("pipeline"); setProcessingStatus("");
+    setAgentStatuses({}); setParallelAgents([]); setCurrentClaimId(null);
   };
 
   // Extract agent results from the orchestrator reasoning trace
@@ -230,6 +614,7 @@ export default function App() {
         @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
         @keyframes gradientShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        @keyframes agentBlink { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.05); } }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: rgba(15,23,42,0.5); } ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
       `}</style>
@@ -292,14 +677,24 @@ export default function App() {
 
             {files.length > 0 && (
               <div style={{ marginBottom: 24 }}>
-                <div style={{ color: "#94a3b8", fontSize: 13, marginBottom: 10, fontFamily: "mono" }}>{files.length} file(s) selected:</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <div style={{ color: "#94a3b8", fontSize: 13, fontFamily: "mono" }}>{files.length} file(s) selected:</div>
+                  <button onClick={() => setFiles([])} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", padding: "4px 12px", borderRadius: 6, cursor: "pointer", fontSize: 11, fontFamily: "mono" }}>
+                    Clear All
+                  </button>
+                </div>
                 {files.map((f, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(15,23,42,0.6)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 8, padding: "10px 16px", marginBottom: 6 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span>{f.type?.includes("image") ? "🖼️" : "📄"}</span>
                       <span style={{ color: "#e2e8f0", fontSize: 13, fontFamily: "mono" }}>{f.name}</span>
                     </div>
-                    <span style={{ color: "#475569", fontSize: 12 }}>{(f.size / 1024).toFixed(1)} KB</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ color: "#475569", fontSize: 12 }}>{(f.size / 1024).toFixed(1)} KB</span>
+                      <button onClick={(e) => { e.stopPropagation(); setFiles(files.filter((_, idx) => idx !== i)); }} style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 ))}
                 <button onClick={processClaimPipeline} style={{ width: "100%", marginTop: 16, padding: 16, background: "linear-gradient(135deg, #06b6d4, #0891b2)", border: "none", borderRadius: 12, color: "#fff", fontSize: 16, fontWeight: 700, cursor: "pointer", letterSpacing: 0.5, boxShadow: "0 4px 20px rgba(6,182,212,0.3)" }}>
@@ -313,19 +708,16 @@ export default function App() {
         {/* =================== PROCESSING STAGE =================== */}
         {stage === "processing" && (
           <div style={{ animation: "fadeSlideIn 0.4s ease both" }}>
-            <h2 style={{ fontSize: 22, fontWeight: 700, color: "#e2e8f0", marginBottom: 6 }}>Processing Claim...</h2>
-            <ProgressBar progress={progress} label="Pipeline Progress" />
-            <div style={{ marginTop: 20, padding: 24, background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12 }}>
-              <div style={{ color: "#06b6d4", fontSize: 14, fontFamily: "mono", animation: progress > 0 && progress < 100 ? "pulse 1.5s infinite" : "none" }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, color: "#e2e8f0", marginBottom: 20, textAlign: "center" }}>Processing Claim...</h2>
+            
+            {/* Agent Graph Visualization */}
+            <AgentGraph agents={agentPipeline} parallelAgents={parallelAgents} agentStatuses={agentStatuses} />
+            
+            {/* Status Message */}
+            <div style={{ marginTop: 24, padding: 20, background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.1)", borderRadius: 12, textAlign: "center" }}>
+              <div style={{ color: "#06b6d4", fontSize: 14, fontFamily: "mono", animation: "pulse 1.5s infinite" }}>
                 ⟳ {processingStatus}
               </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 8, marginTop: 24 }}>
-              {agentPipeline.map((agent) => (
-                <div key={agent.key} style={{ padding: "8px 14px", borderRadius: 8, fontSize: 12, fontFamily: "mono", background: "rgba(30,41,59,0.5)", border: "1px solid rgba(71,85,105,0.3)", color: "#475569" }}>
-                  {agent.icon} {agent.name}
-                </div>
-              ))}
             </div>
           </div>
         )}
@@ -333,10 +725,17 @@ export default function App() {
         {/* =================== RESULTS STAGE =================== */}
         {stage === "results" && result && (
           <div style={{ animation: "fadeSlideIn 0.5s ease both" }}>
+            {/* Agent Graph - Final Status */}
+            <div style={{ marginBottom: 24 }}>
+              <AgentGraph agents={agentPipeline} parallelAgents={[]} decision={result.decision} agentStatuses={agentStatuses} />
+            </div>
+            
             {/* Decision Banner */}
             <div style={{ background: `${decisionColors[result.decision]}11`, border: `2px solid ${decisionColors[result.decision]}44`, borderRadius: 16, padding: "28px 32px", marginBottom: 24, textAlign: "center" }}>
               <div style={{ fontSize: 42, fontWeight: 800, color: decisionColors[result.decision], letterSpacing: -1, marginBottom: 8 }}>
-                {result.decision === "APPROVE" ? "✅" : result.decision === "REJECT" ? "❌" : result.decision === "REVIEW" ? "⚠️" : "⏸️"} CLAIM {result.decision}
+                {result.decision === "APPROVE" ? "✅" : 
+                 result.decision === "REJECT" ? "❌" : 
+                 result.decision === "REVIEW" ? "⚠️" : "⏸️"} CLAIM {result.decision}
               </div>
               
               {/* Fraud Category Badge (if applicable) */}
@@ -395,7 +794,10 @@ export default function App() {
                         const data = await response.json();
                         if (data.success) {
                           setProcessingStatus(`✅ Claim approved and stored! ID: ${data.claim_id}`);
-                          setTimeout(() => setProcessingStatus(""), 3000);
+                          setTimeout(() => {
+                            setProcessingStatus("");
+                            resetApp(); // Navigate to new claim page
+                          }, 1500);
                         } else {
                           setProcessingStatus(`❌ Failed to store claim: ${data.detail || "Unknown error"}`);
                         }
@@ -435,7 +837,10 @@ export default function App() {
                         const data = await response.json();
                         if (data.success) {
                           setProcessingStatus(`✅ Claim rejected and stored! ID: ${data.claim_id}`);
-                          setTimeout(() => setProcessingStatus(""), 3000);
+                          setTimeout(() => {
+                            setProcessingStatus("");
+                            resetApp(); // Navigate to new claim page
+                          }, 1500);
                         } else {
                           setProcessingStatus(`❌ Failed to store claim: ${data.detail || "Unknown error"}`);
                         }
@@ -560,7 +965,7 @@ export default function App() {
                       <input type="file" multiple accept="image/*,application/pdf" onChange={(e) => {
                         const additionalFiles = Array.from(e.target.files);
                         if (additionalFiles.length > 0) {
-                          resumeClaimWithFiles(additionalFiles, result.claim_summary?.claim_id || "unknown");
+                          resumeClaimWithFiles(additionalFiles, currentClaimId);
                         }
                       }} style={{ display: "none" }} />
                     </label>
