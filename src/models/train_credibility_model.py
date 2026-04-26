@@ -62,6 +62,7 @@ RANDOM_STATE = 42
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
+DATASET_PATH = PROJECT_ROOT / "data" / "credibility_synthetic_dataset.csv"
 
 
 # ============================================================
@@ -301,15 +302,24 @@ def save_artifacts(result: dict, model_dir: Path) -> None:
 # Main
 # ============================================================
 
+def save_dataset(df: pd.DataFrame, path: Path) -> None:
+    """Persist the generated synthetic dataset to CSV for reproducibility."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+
+
 def main():
 
     # Step 1: Generate data
     df = generate_synthetic_data(N_SAMPLES)
 
-    # Step 2: Train model
+    # Step 2: Persist dataset
+    save_dataset(df, DATASET_PATH)
+
+    # Step 3: Train model
     result = train_model(df)
 
-    # Step 3: Save
+    # Step 4: Save
     save_artifacts(result, MODEL_DIR)
 
 
